@@ -26,13 +26,7 @@ limitations under the License.
 <br>
 [2]参照issues.apache.org/jira/browse/PHOENIX-4462进行编译
 <br>
-[3] 
-    欢迎指点 邮箱nzy-666@126.com
-<br>
-    
-[a]
-2018/01/17 from 4372-v7.patch
- 
-    1.CDH parcel project test done
-<br>
+[3]
+欢迎指点 邮箱nzy-666@126.com
+
 Copyright ©2014 [Apache Software Foundation](http://www.apache.org/). All Rights Reserved. 
