@@ -22,12 +22,12 @@
 
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>4.13.1-HBase-1.2-CDH5.13.1</version>
+    <version>4.13.1-HBase-1.2-CDH5.13</version>
   </parent>
   <artifactId>phoenix-parcel</artifactId>
   <name>Phoenix Parcels for CDH</name>
@@ -53,6 +53,7 @@
   </properties>
 
   <build>
+
     <plugins>
       <!-- No jars created for this module -->
       <plugin>
