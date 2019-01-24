@@ -15,8 +15,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+
+
 ![logo](http://phoenix.apache.org/images/logo.png)
 
 <b>[Apache Phoenix](http://phoenix.apache.org/)</b> is a SQL skin over HBase delivered as a client-embedded JDBC driver targeting low latency queries over HBase data. Visit the Apache Phoenix website <b>[here](http://phoenix.apache.org/)</b>.
 
+
+[1]来自apache源码 
+<br>
+[2]参照issues.apache.org/jira/browse/PHOENIX-4462进行编译
+<br>
+[3] 
+    欢迎指点 邮箱nzy-666@126.com
+<br>
+    
+[a]
+2018/01/17 from 4372-v7.patch
+ 
+    1.CDH parcel project test done
+<br>
 Copyright ©2014 [Apache Software Foundation](http://www.apache.org/). All Rights Reserved. 
