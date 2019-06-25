@@ -23,6 +23,8 @@ import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_STAR
 import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_STOP_ROW_SUFFIX;
 import static org.apache.phoenix.monitoring.GlobalClientMetrics.GLOBAL_FAILED_QUERY_COUNTER;
 import static org.apache.phoenix.monitoring.GlobalClientMetrics.GLOBAL_QUERY_TIMEOUT_COUNTER;
+import static org.apache.phoenix.query.QueryServices.WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB;
+import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB;
 import static org.apache.phoenix.schema.PTable.IndexType.LOCAL;
 import static org.apache.phoenix.schema.PTableType.INDEX;
 import static org.apache.phoenix.util.ByteUtil.EMPTY_BYTE_ARRAY;
@@ -67,6 +69,7 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.phoenix.cache.ServerCacheClient.ServerCache;
+import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
 import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.RowProjector;
 import org.apache.phoenix.compile.ScanRanges;
@@ -190,6 +193,9 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
     private static void initializeScan(QueryPlan plan, Integer perScanLimit, Integer offset, Scan scan) throws SQLException {
         StatementContext context = plan.getContext();
         TableRef tableRef = plan.getTableRef();
+        boolean wildcardIncludesDynamicCols = context.getConnection().getQueryServices()
+                .getConfiguration().getBoolean(WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB,
+                        DEFAULT_WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB);
         PTable table = tableRef.getTable();
 
         Map<byte [], NavigableSet<byte []>> familyMap = scan.getFamilyMap();
@@ -208,7 +214,8 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
             FilterableStatement statement = plan.getStatement();
             RowProjector projector = plan.getProjector();
             boolean optimizeProjection = false;
-            boolean keyOnlyFilter = familyMap.isEmpty() && context.getWhereConditionColumns().isEmpty();
+            boolean keyOnlyFilter = familyMap.isEmpty() && !wildcardIncludesDynamicCols &&
+                    context.getWhereConditionColumns().isEmpty();
             if (!projector.projectEverything()) {
                 // If nothing projected into scan and we only have one column family, just allow everything
                 // to be projected and use a FirstKeyOnlyFilter to skip from row to row. This turns out to
@@ -256,19 +263,21 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
             if(offset!=null){
                 ScanUtil.addOffsetAttribute(scan, offset);
             }
-            int cols = plan.getGroupBy().getOrderPreservingColumnCount();
+            GroupBy groupBy = plan.getGroupBy();
+            int cols = groupBy.getOrderPreservingColumnCount();
             if (cols > 0 && keyOnlyFilter &&
                 !plan.getStatement().getHint().hasHint(HintNode.Hint.RANGE_SCAN) &&
                 cols < plan.getTableRef().getTable().getRowKeySchema().getFieldCount() &&
-                plan.getGroupBy().isOrderPreserving() &&
-                (context.getAggregationManager().isEmpty() || plan.getGroupBy().isUngroupedAggregate())) {
-                
-                ScanUtil.andFilterAtEnd(scan,
-                        new DistinctPrefixFilter(plan.getTableRef().getTable().getRowKeySchema(),
-                                cols));
-                if (plan.getLimit() != null) { // We can push the limit to the server
-                    ScanUtil.andFilterAtEnd(scan, new PageFilter(plan.getLimit()));
-                }
+                groupBy.isOrderPreserving() &&
+                (context.getAggregationManager().isEmpty() || groupBy.isUngroupedAggregate())) {
+
+                    ScanUtil.andFilterAtEnd(scan,
+                            new DistinctPrefixFilter(plan.getTableRef().getTable().getRowKeySchema(),cols));
+                    if (!groupBy.isUngroupedAggregate() && plan.getLimit() != null) {
+                        // We can push the limit to the server,but for UngroupedAggregate
+                        // we can not push the limit.
+                        ScanUtil.andFilterAtEnd(scan, new PageFilter(plan.getLimit()));
+                    }
             }
             scan.setAttribute(BaseScannerRegionObserver.QUALIFIER_ENCODING_SCHEME, new byte[]{table.getEncodingScheme().getSerializedMetadataValue()});
             scan.setAttribute(BaseScannerRegionObserver.IMMUTABLE_STORAGE_ENCODING_SCHEME, new byte[]{table.getImmutableStorageScheme().getSerializedMetadataValue()});
@@ -774,10 +783,8 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
             offset = offset + rangeSpan;
         }
         useSkipScan &= dataScanRanges.useSkipScanFilter();
-        KeyRange minMaxRange = 
-                clipRange(dataScanRanges.getSchema(), 0, nColumnsInCommon, dataScanRanges.getMinMaxRange());
         slotSpan = slotSpan.length == cnf.size() ? slotSpan : Arrays.copyOf(slotSpan, cnf.size());
-        ScanRanges commonScanRanges = ScanRanges.create(dataScanRanges.getSchema(), cnf, slotSpan, minMaxRange, null, useSkipScan, -1);
+        ScanRanges commonScanRanges = ScanRanges.create(dataScanRanges.getSchema(), cnf, slotSpan, null, useSkipScan, -1);
         return commonScanRanges;
     }
         
@@ -1280,10 +1287,11 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
                         if (timeOutForScan < 0) {
                             throw new SQLExceptionInfo.Builder(SQLExceptionCode.OPERATION_TIMED_OUT).setMessage(". Query couldn't be completed in the alloted time: " + queryTimeOut + " ms").build().buildException(); 
                         }
+                        // make sure we apply the iterators in order
                         if (isLocalIndex && previousScan != null && previousScan.getScan() != null
                                 && (((!isReverse && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_ACTUAL_START_ROW),
                                         previousScan.getScan().getStopRow()) < 0)
-                                || (isReverse && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_ACTUAL_START_ROW),
+                                || (isReverse && previousScan.getScan().getStopRow().length > 0 && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_ACTUAL_START_ROW),
                                         previousScan.getScan().getStopRow()) > 0)
                                 || (Bytes.compareTo(scanPair.getFirst().getStopRow(), previousScan.getScan().getStopRow()) == 0)) 
                                     && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_START_ROW_SUFFIX), previousScan.getScan().getAttribute(SCAN_START_ROW_SUFFIX))==0)) {
@@ -1311,8 +1319,12 @@ public abstract class BaseResultIterators extends ExplainTable implements Result
                                     throw e2;
                                 }
                                 Long cacheId = ((HashJoinCacheNotFoundException)e2).getCacheId();
-                                if (!hashCacheClient.addHashCacheToServer(startKey,
-                                        caches.get(new ImmutableBytesPtr(Bytes.toBytes(cacheId))), plan.getTableRef().getTable())) { throw e2; }
+                                ServerCache cache = caches.get(new ImmutableBytesPtr(Bytes.toBytes(cacheId)));
+                                if (cache .getCachePtr() != null) {
+                                    if (!hashCacheClient.addHashCacheToServer(startKey, cache, plan.getTableRef().getTable())) {
+                                        throw e2;
+                                    }
+                                }
                             }
                             concatIterators =
                                     recreateIterators(services, isLocalIndex, allIterators,

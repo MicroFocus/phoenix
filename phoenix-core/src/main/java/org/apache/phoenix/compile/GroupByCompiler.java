@@ -23,13 +23,14 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+import net.jcip.annotations.Immutable;
+
 import org.apache.hadoop.hbase.util.Pair;
-import org.apache.http.annotation.Immutable;
+import org.apache.phoenix.compile.OrderPreservingTracker.Info;
 import org.apache.phoenix.compile.OrderPreservingTracker.Ordering;
 import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
 import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.exception.SQLExceptionInfo;
-import org.apache.phoenix.execute.TupleProjector;
 import org.apache.phoenix.expression.CoerceExpression;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.parse.AliasedNode;
@@ -62,9 +63,10 @@ public class GroupByCompiler {
         private final boolean isOrderPreserving;
         private final int orderPreservingColumnCount;
         private final boolean isUngroupedAggregate;
+        private final List<Info> orderPreservingTrackInfos;
         public static final GroupByCompiler.GroupBy EMPTY_GROUP_BY = new GroupBy(new GroupByBuilder()) {
             @Override
-            public GroupBy compile(StatementContext context, TupleProjector tupleProjector) throws SQLException {
+            public GroupBy compile(StatementContext context, QueryPlan innerQueryPlan, Expression whereExpression) throws SQLException {
                 return this;
             }
             
@@ -79,7 +81,7 @@ public class GroupByCompiler {
         };
         public static final GroupByCompiler.GroupBy UNGROUPED_GROUP_BY = new GroupBy(new GroupByBuilder().setIsOrderPreserving(true).setIsUngroupedAggregate(true)) {
             @Override
-            public GroupBy compile(StatementContext context, TupleProjector tupleProjector) throws SQLException {
+            public GroupBy compile(StatementContext context, QueryPlan innerQueryPlan, Expression whereExpression) throws SQLException {
                 return this;
             }
 
@@ -102,6 +104,7 @@ public class GroupByCompiler {
             this.isOrderPreserving = builder.isOrderPreserving;
             this.orderPreservingColumnCount = builder.orderPreservingColumnCount;
             this.isUngroupedAggregate = builder.isUngroupedAggregate;
+            this.orderPreservingTrackInfos = builder.orderPreservingTrackInfos;
         }
         
         public List<Expression> getExpressions() {
@@ -137,12 +140,23 @@ public class GroupByCompiler {
         public int getOrderPreservingColumnCount() {
             return orderPreservingColumnCount;
         }
-        
-        public GroupBy compile(StatementContext context, TupleProjector tupleProjector) throws SQLException {
+
+        public List<Info> getOrderPreservingTrackInfos() {
+            return orderPreservingTrackInfos;
+        }
+
+        public GroupBy compile(StatementContext context, QueryPlan innerQueryPlan, Expression whereExpression) throws SQLException {
             boolean isOrderPreserving = this.isOrderPreserving;
             int orderPreservingColumnCount = 0;
             if (isOrderPreserving) {
-                OrderPreservingTracker tracker = new OrderPreservingTracker(context, GroupBy.EMPTY_GROUP_BY, Ordering.UNORDERED, expressions.size(), tupleProjector);
+                OrderPreservingTracker tracker = new OrderPreservingTracker(
+                        context,
+                        GroupBy.EMPTY_GROUP_BY,
+                        Ordering.UNORDERED,
+                        expressions.size(),
+                        null,
+                        innerQueryPlan,
+                        whereExpression);
                 for (int i = 0; i < expressions.size(); i++) {
                     Expression expression = expressions.get(i);
                     tracker.track(expression);
@@ -155,13 +169,15 @@ public class GroupByCompiler {
                 orderPreservingColumnCount = tracker.getOrderPreservingColumnCount();
                 if(isOrderPreserving) {
                     //reorder the groupby expressions following pk columns
-                    List<Expression> newExpressions = tracker.getExpressionsFromOrderPreservingTrackInfos();
+                    List<Info> orderPreservingTrackInfos = tracker.getOrderPreservingTrackInfos();
+                    List<Expression> newExpressions = Info.extractExpressions(orderPreservingTrackInfos);
                     assert newExpressions.size() == expressions.size();
                     return new GroupBy.GroupByBuilder(this)
                                .setIsOrderPreserving(isOrderPreserving)
                                .setOrderPreservingColumnCount(orderPreservingColumnCount)
                                .setExpressions(newExpressions)
                                .setKeyExpressions(newExpressions)
+                               .setOrderPreservingTrackInfos(orderPreservingTrackInfos)
                                .build();
                 }
             }
@@ -270,6 +286,7 @@ public class GroupByCompiler {
             private List<Expression> expressions = Collections.emptyList();
             private List<Expression> keyExpressions = Collections.emptyList();
             private boolean isUngroupedAggregate;
+            private List<Info> orderPreservingTrackInfos = Collections.emptyList();
 
             public GroupByBuilder() {
             }
@@ -307,6 +324,11 @@ public class GroupByCompiler {
                 return this;
             }
 
+            public GroupByBuilder setOrderPreservingTrackInfos(List<Info> orderPreservingTrackInfos) {
+                this.orderPreservingTrackInfos = orderPreservingTrackInfos;
+                return this;
+            }
+
             public GroupBy build() {
                 return new GroupBy(this);
             }
@@ -331,7 +353,7 @@ public class GroupByCompiler {
      * @throws ColumnNotFoundException if column name could not be resolved
      * @throws AmbiguousColumnException if an unaliased column name is ambiguous across multiple tables
      */
-    public static GroupBy compile(StatementContext context, SelectStatement statement, boolean isOrderPreserving) throws SQLException {
+    public static GroupBy compile(StatementContext context, SelectStatement statement) throws SQLException {
         List<ParseNode> groupByNodes = statement.getGroupBy();
         /**
          * Distinct can use an aggregate plan if there's no group by.
@@ -392,7 +414,7 @@ public class GroupByCompiler {
             return GroupBy.EMPTY_GROUP_BY;
         }
         GroupBy groupBy = new GroupBy.GroupByBuilder()
-                .setIsOrderPreserving(isOrderPreserving)
+                .setIsOrderPreserving(OrderByCompiler.isTrackOrderByPreserving(statement))
                 .setExpressions(expressions).setKeyExpressions(expressions)
                 .setIsUngroupedAggregate(isUngroupedAggregate).build();
         return groupBy;

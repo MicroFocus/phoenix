@@ -84,7 +84,7 @@ public class ListJarsQueryPlan implements QueryPlan {
         PColumn column =
                 new PColumnImpl(colName, null,
                         PVarchar.INSTANCE, null, null, false, 0, SortOrder.getDefault(), 0, null,
-                        false, null, false, false, colName.getBytes());
+                        false, null, false, false, colName.getBytes(), HConstants.LATEST_TIMESTAMP);
         List<PColumn> columns = new ArrayList<PColumn>();
         columns.add(column);
         Expression expression =
@@ -279,5 +279,10 @@ public class ListJarsQueryPlan implements QueryPlan {
     @Override
     public Long getEstimateInfoTimestamp() throws SQLException {
         return 0l;
+    }
+
+    @Override
+    public List<OrderBy> getOutputOrderBys() {
+        return Collections.<OrderBy> emptyList();
     }
 }

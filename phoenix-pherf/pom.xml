@@ -15,7 +15,7 @@
 	<parent>
 		<groupId>org.apache.phoenix</groupId>
 		<artifactId>phoenix</artifactId>
-		<version>5.0.0-HBase-2.1.0-cdh6.1.1</version>
+		<version>5.1.0-cdh6.1.1-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>phoenix-pherf</artifactId>
@@ -110,11 +110,6 @@
 			<artifactId>hadoop-minicluster</artifactId>
 			<scope>test</scope>
 		</dependency>
-    <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <scope>test</scope>
-    </dependency>
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-all</artifactId>

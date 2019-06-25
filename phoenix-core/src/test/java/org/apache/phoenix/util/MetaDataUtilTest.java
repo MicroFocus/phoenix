@@ -17,12 +17,22 @@
  */
 package org.apache.phoenix.util;
 
+import static org.apache.phoenix.coprocessor.MetaDataEndpointImpl.VIEW_MODIFIED_PROPERTY_BYTES;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.UPDATE_CACHE_FREQUENCY_BYTES;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.ExtendedCell;
+import org.apache.hadoop.hbase.ExtendedCellBuilder;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.RawCellBuilderFactory;
+import org.apache.hadoop.hbase.Tag;
+import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.VersionInfo;
@@ -31,13 +41,49 @@ import org.apache.phoenix.hbase.index.util.GenericKeyValueBuilder;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
 import org.apache.phoenix.hbase.index.util.KeyValueBuilder;
 import org.apache.phoenix.hbase.index.util.VersionUtil;
-import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.query.HBaseFactoryProvider;
 import org.apache.phoenix.query.QueryServices;
+import org.apache.phoenix.schema.types.PInteger;
+import org.apache.phoenix.schema.types.PLong;
+import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mockito;
 
+import java.util.Iterator;
+import java.util.List;
+
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.apache.hadoop.hbase.HConstants.EMPTY_BYTE_ARRAY;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES;
 
 public class MetaDataUtilTest {
+
+    private static final byte[] ROW = Bytes.toBytes("row");
+    private static final byte[] QUALIFIER = Bytes.toBytes("qual");
+    private static final byte[] ORIGINAL_VALUE = Bytes.toBytes("generic-value");
+    private static final byte[] DUMMY_TAGS = Bytes.toBytes("tags");
+    private final ExtendedCellBuilder mockBuilder = Mockito.mock(ExtendedCellBuilder.class);
+    private final ExtendedCell mockCellWithTags = Mockito.mock(ExtendedCell.class);
+
+    @Before
+    public void setupMockCellBuilder() {
+        Mockito.when(mockBuilder.setRow(Mockito.any(byte[].class), Mockito.anyInt(),
+                Mockito.anyInt())).thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setFamily(Mockito.any(byte[].class), Mockito.anyInt(),
+                Mockito.anyInt())).thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setQualifier(Mockito.any(byte[].class), Mockito.anyInt(),
+                Mockito.anyInt())).thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setValue(Mockito.any(byte[].class), Mockito.anyInt(),
+                Mockito.anyInt())).thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setTimestamp(Mockito.anyLong())).thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setType(Mockito.any(Cell.Type.class)))
+                .thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.setTags(Mockito.any(byte[].class)))
+                .thenReturn(mockBuilder);
+        Mockito.when(mockBuilder.build()).thenReturn(mockCellWithTags);
+    }
 
     @Test
     public void testEncode() {
@@ -47,7 +93,15 @@ public class MetaDataUtilTest {
         assertTrue(VersionUtil.encodeVersion("0.94.1-mapR")>VersionUtil.encodeVersion("0.94"));
         assertTrue(VersionUtil.encodeVersion("1", "1", "3")>VersionUtil.encodeVersion("1", "1", "1"));
     }
-    
+
+    @Test
+    public void testDecode() {
+        int encodedVersion = VersionUtil.encodeVersion("4.15.5");
+        assertEquals(VersionUtil.decodeMajorVersion(encodedVersion), 4);
+        assertEquals(VersionUtil.decodeMinorVersion(encodedVersion), 15);
+        assertEquals(VersionUtil.decodePatchVersion(encodedVersion), 5);
+    }
+
     @Test
     public void testCompatibility() {
         assertTrue(MetaDataUtil.areClientAndServerCompatible(VersionUtil.encodeVersion(1,2,1), 1, 2));
@@ -62,7 +116,72 @@ public class MetaDataUtilTest {
         assertFalse(MetaDataUtil.areClientAndServerCompatible(VersionUtil.encodeVersion(3,1,10), 3, 5));
     }
 
-  /**
+    @Test
+    public void testMutatingAPut() throws Exception {
+        Put put = generateOriginalPut();
+        byte[] newValue = Bytes.toBytes("new-value");
+        Cell cell = put.get(TABLE_FAMILY_BYTES, QUALIFIER).get(0);
+        assertEquals(Bytes.toString(ORIGINAL_VALUE),
+                Bytes.toString(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength()));
+        MetaDataUtil.mutatePutValue(put, TABLE_FAMILY_BYTES, QUALIFIER, newValue);
+        cell = put.get(TABLE_FAMILY_BYTES, QUALIFIER).get(0);
+        assertEquals(Bytes.toString(newValue),
+                Bytes.toString(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength()));
+    }
+
+    @Test
+    public void testTaggingAPutWrongQualifier() throws Exception {
+        Put put = generateOriginalPut();
+        Cell initialCell = put.get(TABLE_FAMILY_BYTES, QUALIFIER).get(0);
+
+        // Different qualifier, so no tags should be set
+        MetaDataUtil.conditionallyAddTagsToPutCells(put, TABLE_FAMILY_BYTES, EMPTY_BYTE_ARRAY,
+                mockBuilder, EMPTY_BYTE_ARRAY, DUMMY_TAGS);
+        verify(mockBuilder, never()).setTags(Mockito.any(byte[].class));
+        Cell newCell = put.getFamilyCellMap().get(TABLE_FAMILY_BYTES).get(0);
+        assertEquals(initialCell, newCell);
+        assertNull(TagUtil.carryForwardTags(newCell));
+    }
+
+    @Test
+    public void testTaggingAPutUnconditionally() throws Exception {
+        Put put = generateOriginalPut();
+
+        // valueArray is null so we always set tags
+        MetaDataUtil.conditionallyAddTagsToPutCells(put, TABLE_FAMILY_BYTES, QUALIFIER,
+                mockBuilder, null, DUMMY_TAGS);
+        verify(mockBuilder, times(1)).setTags(Mockito.any(byte[].class));
+        Cell newCell = put.getFamilyCellMap().get(TABLE_FAMILY_BYTES).get(0);
+        assertEquals(mockCellWithTags, newCell);
+    }
+
+    @Test
+    public void testSkipTaggingAPutDueToSameCellValue() throws Exception {
+        Put put = generateOriginalPut();
+        Cell initialCell = put.get(TABLE_FAMILY_BYTES, QUALIFIER).get(0);
+
+        // valueArray is set as the value stored in the cell, so we skip tagging the cell
+        MetaDataUtil.conditionallyAddTagsToPutCells(put, TABLE_FAMILY_BYTES, QUALIFIER,
+                mockBuilder, ORIGINAL_VALUE, DUMMY_TAGS);
+        verify(mockBuilder, never()).setTags(Mockito.any(byte[].class));
+        Cell newCell = put.getFamilyCellMap().get(TABLE_FAMILY_BYTES).get(0);
+        assertEquals(initialCell, newCell);
+        assertNull(TagUtil.carryForwardTags(newCell));
+    }
+
+    @Test
+    public void testTaggingAPutDueToDifferentCellValue() throws Exception {
+        Put put = generateOriginalPut();
+
+        // valueArray is set to a value different than the one in the cell, so we tag the cell
+        MetaDataUtil.conditionallyAddTagsToPutCells(put, TABLE_FAMILY_BYTES, QUALIFIER,
+                mockBuilder, EMPTY_BYTE_ARRAY, DUMMY_TAGS);
+        verify(mockBuilder, times(1)).setTags(Mockito.any(byte[].class));
+        Cell newCell = put.getFamilyCellMap().get(TABLE_FAMILY_BYTES).get(0);
+        assertEquals(mockCellWithTags, newCell);
+    }
+
+    /**
    * Ensure it supports {@link GenericKeyValueBuilder}
    * @throws Exception on failure
    */
@@ -70,31 +189,28 @@ public class MetaDataUtilTest {
   public void testGetMutationKeyValue() throws Exception {
     String version = VersionInfo.getVersion();
     KeyValueBuilder builder = KeyValueBuilder.get(version);
-    byte[] row = Bytes.toBytes("row");
-    byte[] family = PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES;
-    byte[] qualifier = Bytes.toBytes("qual");
-    byte[] value = Bytes.toBytes("generic-value");
-    KeyValue kv = builder.buildPut(wrap(row), wrap(family), wrap(qualifier), wrap(value));
-    Put put = new Put(row);
-    KeyValueBuilder.addQuietly(put, builder, kv);
+    KeyValue kv = builder.buildPut(wrap(ROW), wrap(TABLE_FAMILY_BYTES), wrap(QUALIFIER),
+            wrap(ORIGINAL_VALUE));
+    Put put = new Put(ROW);
+    KeyValueBuilder.addQuietly(put, kv);
 
     // read back out the value
     ImmutableBytesPtr ptr = new ImmutableBytesPtr();
-    assertTrue(MetaDataUtil.getMutationValue(put, qualifier, builder, ptr));
+    assertTrue(MetaDataUtil.getMutationValue(put, QUALIFIER, builder, ptr));
     assertEquals("Value returned doesn't match stored value for " + builder.getClass().getName()
         + "!", 0,
-      ByteUtil.BYTES_PTR_COMPARATOR.compare(ptr, wrap(value)));
+      ByteUtil.BYTES_PTR_COMPARATOR.compare(ptr, wrap(ORIGINAL_VALUE)));
 
     // try again, this time with the clientkeyvalue builder
     if (builder != GenericKeyValueBuilder.INSTANCE) {
         builder = GenericKeyValueBuilder.INSTANCE;
-        value = Bytes.toBytes("client-value");
-        kv = builder.buildPut(wrap(row), wrap(family), wrap(qualifier), wrap(value));
-        put = new Put(row);
-        KeyValueBuilder.addQuietly(put, builder, kv);
+        byte[] value = Bytes.toBytes("client-value");
+        kv = builder.buildPut(wrap(ROW), wrap(TABLE_FAMILY_BYTES), wrap(QUALIFIER), wrap(value));
+        put = new Put(ROW);
+        KeyValueBuilder.addQuietly(put, kv);
     
         // read back out the value
-        assertTrue(MetaDataUtil.getMutationValue(put, qualifier, builder, ptr));
+        assertTrue(MetaDataUtil.getMutationValue(put, QUALIFIER, builder, ptr));
         assertEquals("Value returned doesn't match stored value for " + builder.getClass().getName()
             + "!", 0,
           ByteUtil.BYTES_PTR_COMPARATOR.compare(ptr, wrap(value)));
@@ -139,5 +255,48 @@ public class MetaDataUtilTest {
                 MetaDataProtocol.PHOENIX_MINOR_VERSION, MetaDataProtocol.PHOENIX_PATCH_NUMBER);
         assertEquals(expectedPhoenixVersion, phoenixVersion);
     }
+
+    private Put generateOriginalPut() {
+        String version = VersionInfo.getVersion();
+        KeyValueBuilder builder = KeyValueBuilder.get(version);
+        KeyValue kv = builder.buildPut(wrap(ROW), wrap(TABLE_FAMILY_BYTES), wrap(QUALIFIER),
+                wrap(ORIGINAL_VALUE));
+        Put put = new Put(ROW);
+        KeyValueBuilder.addQuietly(put, kv);
+        return put;
+    }
+
+    @Test
+    public void testConditionallyAddTagsToPutCells( ) {
+        List<Tag> tags = TagUtil.asList(VIEW_MODIFIED_PROPERTY_BYTES, 0, VIEW_MODIFIED_PROPERTY_BYTES.length);
+        assertEquals(tags.size(), 1);
+        Tag expectedTag = tags.get(0);
+
+        String version = VersionInfo.getVersion();
+        KeyValueBuilder builder = KeyValueBuilder.get(version);
+        KeyValue kv = builder.buildPut(wrap(ROW), wrap(TABLE_FAMILY_BYTES), wrap(UPDATE_CACHE_FREQUENCY_BYTES), wrap(
+                PLong.INSTANCE.toBytes(0)));
+        Put put = new Put(ROW);
+        KeyValueBuilder.addQuietly(put, kv);
+
+        ExtendedCellBuilder cellBuilder = (ExtendedCellBuilder) RawCellBuilderFactory.create();
+        MetaDataUtil.conditionallyAddTagsToPutCells(put, TABLE_FAMILY_BYTES, UPDATE_CACHE_FREQUENCY_BYTES, cellBuilder,
+                PInteger.INSTANCE.toBytes(1), VIEW_MODIFIED_PROPERTY_BYTES);
+
+        Cell cell = put.getFamilyCellMap().get(TABLE_FAMILY_BYTES).get(0);
+
+        // To check the cell tag whether view has modified this property
+        assertTrue(Bytes.compareTo(expectedTag.getValueArray(), TagUtil.concatTags(EMPTY_BYTE_ARRAY, cell)) == 0);
+        assertTrue(Bytes.contains(TagUtil.concatTags(EMPTY_BYTE_ARRAY, cell), expectedTag.getValueArray()));
+
+        // To check tag data can be correctly deserialized
+        Iterator<Tag> tagIterator = PrivateCellUtil.tagsIterator(cell);
+        assertTrue(tagIterator.hasNext());
+        Tag actualTag = tagIterator.next();
+        assertTrue(Bytes.compareTo(actualTag.getValueArray(), actualTag.getValueOffset(), actualTag.getValueLength(),
+                expectedTag.getValueArray(), expectedTag.getValueOffset(), expectedTag.getValueLength()) == 0);
+        assertFalse(tagIterator.hasNext());
+    }
+
 }
 

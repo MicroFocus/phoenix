@@ -46,6 +46,7 @@ import org.apache.phoenix.util.MetaDataUtil;
 import org.apache.phoenix.util.QueryUtil;
 import org.apache.phoenix.util.ScanUtil;
 import org.apache.phoenix.util.SchemaUtil;
+import org.apache.phoenix.util.TestUtil;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
@@ -57,13 +58,13 @@ public abstract class BaseViewIT extends ParallelStatsEnabledIT {
     protected String schemaName;
 	protected String fullTableName;
 	protected String tableDDLOptions;
-	protected boolean transactional;
+	protected String txProvider;
 
-    public BaseViewIT( boolean transactional) {
+    public BaseViewIT( String txProvider) {
 		StringBuilder optionBuilder = new StringBuilder();
-		this.transactional = transactional;
-		if (transactional) {
-			optionBuilder.append(" TRANSACTIONAL=true ");
+		this.txProvider = txProvider;
+		if (txProvider != null) {
+			optionBuilder.append(" TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + txProvider + "'");
 		}
 		this.schemaName = "S_" + generateUniqueName();
 		this.tableDDLOptions = optionBuilder.toString();
@@ -71,9 +72,9 @@ public abstract class BaseViewIT extends ParallelStatsEnabledIT {
         this.fullTableName = SchemaUtil.getTableName(schemaName, tableName);
 	}
     
-    @Parameters(name="transactional = {0}")
-    public static Collection<Boolean> data() {
-        return Arrays.asList(new Boolean[] { false, true });
+    @Parameters(name="transactionProvider={0}")
+    public static Collection<Object[]> data() {
+        return TestUtil.filterTxParamData(Arrays.asList(new Object[][] { {"TEPHRA"}, {"OMID"}, {null} }), 0);
     }
     
     protected void testUpdatableViewWithIndex(Integer saltBuckets, boolean localIndex) throws Exception {
@@ -196,8 +197,8 @@ public abstract class BaseViewIT extends ParallelStatsEnabledIT {
                 queryPlan);
         } else {
             assertEquals(saltBuckets == null
-                    ? "CLIENT PARALLEL 1-WAY RANGE SCAN OVER " + viewIndexPhysicalName +" [" + Short.MIN_VALUE + ",51]"
-                            : "CLIENT PARALLEL " + saltBuckets + "-WAY RANGE SCAN OVER " + viewIndexPhysicalName + " [0," + Short.MIN_VALUE + ",51] - ["+(saltBuckets.intValue()-1)+"," + Short.MIN_VALUE + ",51]\nCLIENT MERGE SORT",
+                    ? "CLIENT PARALLEL 1-WAY RANGE SCAN OVER " + viewIndexPhysicalName +" [" + Long.MIN_VALUE + ",51]"
+                            : "CLIENT PARALLEL " + saltBuckets + "-WAY RANGE SCAN OVER " + viewIndexPhysicalName + " [0," + Long.MIN_VALUE + ",51] - ["+(saltBuckets.intValue()-1)+"," + Long.MIN_VALUE + ",51]\nCLIENT MERGE SORT",
                             queryPlan);
         }
 
@@ -237,9 +238,9 @@ public abstract class BaseViewIT extends ParallelStatsEnabledIT {
         } else {
             physicalTableName = viewIndexPhysicalName;
             assertEquals(saltBuckets == null
-                    ? "CLIENT PARALLEL 1-WAY RANGE SCAN OVER " + viewIndexPhysicalName +" [" + (Short.MIN_VALUE+1) + ",'foo']\n"
+                    ? "CLIENT PARALLEL 1-WAY RANGE SCAN OVER " + viewIndexPhysicalName +" [" + (Long.MIN_VALUE+1) + ",'foo']\n"
                             + "    SERVER FILTER BY FIRST KEY ONLY"
-                            : "CLIENT PARALLEL " + saltBuckets + "-WAY RANGE SCAN OVER " + viewIndexPhysicalName + " [0," + (Short.MIN_VALUE+1) + ",'foo'] - ["+(saltBuckets.intValue()-1)+"," + (Short.MIN_VALUE+1) + ",'foo']\n"
+                            : "CLIENT PARALLEL " + saltBuckets + "-WAY RANGE SCAN OVER " + viewIndexPhysicalName + " [0," + (Long.MIN_VALUE+1) + ",'foo'] - ["+(saltBuckets.intValue()-1)+"," + (Long.MIN_VALUE+1) + ",'foo']\n"
                                     + "    SERVER FILTER BY FIRST KEY ONLY\n"
                                     + "CLIENT MERGE SORT",
                             QueryUtil.getExplainPlan(rs));

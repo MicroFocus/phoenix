@@ -18,7 +18,7 @@
 package org.apache.phoenix.schema;
 
 import static org.apache.phoenix.exception.SQLExceptionCode.CANNOT_ALTER_PROPERTY;
-import static org.apache.phoenix.exception.SQLExceptionCode.COLUMN_FAMILY_NOT_ALLOWED_FOR_TTL;
+import static org.apache.phoenix.exception.SQLExceptionCode.COLUMN_FAMILY_NOT_ALLOWED_FOR_PROPERTY;
 import static org.apache.phoenix.exception.SQLExceptionCode.COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY;
 import static org.apache.phoenix.exception.SQLExceptionCode.DEFAULT_COLUMN_FAMILY_ONLY_ON_CREATE_TABLE;
 import static org.apache.phoenix.exception.SQLExceptionCode.SALT_ONLY_ON_CREATE_TABLE;
@@ -74,7 +74,7 @@ public enum TableProperty {
         }
     },
 
-    TTL(HColumnDescriptor.TTL, COLUMN_FAMILY_NOT_ALLOWED_FOR_TTL, true, CANNOT_ALTER_PROPERTY, false, false) {
+    TTL(HColumnDescriptor.TTL, COLUMN_FAMILY_NOT_ALLOWED_FOR_PROPERTY, true, CANNOT_ALTER_PROPERTY, false, false) {
         @Override
         public Object getPTableValue(PTable table) {
             return null;
@@ -152,7 +152,7 @@ public enum TableProperty {
             return table.isAppendOnlySchema();
         }
     },
-    GUIDE_POSTS_WIDTH(PhoenixDatabaseMetaData.GUIDE_POSTS_WIDTH, true, false, false, false) {
+    GUIDE_POSTS_WIDTH(PhoenixDatabaseMetaData.GUIDE_POSTS_WIDTH, true, false, false) {
         @Override
         public Object getValue(Object value) {
             return value == null ? null : ((Number) value).longValue();
@@ -231,36 +231,26 @@ public enum TableProperty {
     private final SQLExceptionCode mutatingImmutablePropException;
     private final boolean isValidOnView;
     private final boolean isMutableOnView;
-    private final boolean propagateToViews;
 
     private TableProperty(String propertyName, boolean isMutable, boolean isValidOnView, boolean isMutableOnView) {
-        this(propertyName, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, isMutable, CANNOT_ALTER_PROPERTY, isValidOnView, isMutableOnView, true);
-    }
-
-    private TableProperty(String propertyName, boolean isMutable, boolean isValidOnView, boolean isMutableOnView, boolean propagateToViews) {
-        this(propertyName, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, isMutable, CANNOT_ALTER_PROPERTY, isValidOnView, isMutableOnView, propagateToViews);
+        this(propertyName, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, isMutable, CANNOT_ALTER_PROPERTY, isValidOnView, isMutableOnView);
     }
 
     private TableProperty(String propertyName, SQLExceptionCode colFamilySpecifiedException, boolean isMutable, boolean isValidOnView, boolean isMutableOnView) {
-        this(propertyName, colFamilySpecifiedException, isMutable, CANNOT_ALTER_PROPERTY, isValidOnView, isMutableOnView, true);
+        this(propertyName, colFamilySpecifiedException, isMutable, CANNOT_ALTER_PROPERTY, isValidOnView, isMutableOnView);
     }
 
     private TableProperty(String propertyName, boolean isMutable, boolean isValidOnView, boolean isMutableOnView, SQLExceptionCode isMutatingException) {
-        this(propertyName, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, isMutable, isMutatingException, isValidOnView, isMutableOnView, true);
+        this(propertyName, COLUMN_FAMILY_NOT_ALLOWED_TABLE_PROPERTY, isMutable, isMutatingException, isValidOnView, isMutableOnView);
     }
 
     private TableProperty(String propertyName, SQLExceptionCode colFamSpecifiedException, boolean isMutable, SQLExceptionCode mutatingException, boolean isValidOnView, boolean isMutableOnView) {
-        this(propertyName, colFamSpecifiedException, isMutable, mutatingException, isValidOnView, isMutableOnView, true);
-    }
-
-    private TableProperty(String propertyName, SQLExceptionCode colFamSpecifiedException, boolean isMutable, SQLExceptionCode mutatingException, boolean isValidOnView, boolean isMutableOnView, boolean propagateToViews) {
         this.propertyName = propertyName;
         this.colFamSpecifiedException = colFamSpecifiedException;
         this.isMutable = isMutable;
         this.mutatingImmutablePropException = mutatingException;
         this.isValidOnView = isValidOnView;
         this.isMutableOnView = isMutableOnView;
-        this.propagateToViews = propagateToViews;
     }
 
     public static boolean isPhoenixTableProperty(String property) {
@@ -324,10 +314,6 @@ public enum TableProperty {
 
     public boolean isMutableOnView() {
         return isMutableOnView;
-    }
-
-    public boolean propagateToViews() {
-        return propagateToViews;
     }
 
     abstract public Object getPTableValue(PTable table);

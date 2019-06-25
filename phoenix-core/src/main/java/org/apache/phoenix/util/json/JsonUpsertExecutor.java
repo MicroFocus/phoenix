@@ -22,13 +22,13 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
 import javax.annotation.Nullable;
 
-import java.util.Base64;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.expression.function.EncodeFormat;
 import org.apache.phoenix.query.QueryServices;
@@ -184,6 +184,9 @@ public class JsonUpsertExecutor extends UpsertExecutor<Map<?, ?>, Object> {
         public Object apply(@Nullable Object input) {
             if (input == null) {
                 return null;
+            }
+            if (dataType == PTimestamp.INSTANCE) {
+                return DateUtil.parseTimestamp(input.toString());
             }
             if (dateTimeParser != null && input instanceof String) {
                 final String s = (String) input;

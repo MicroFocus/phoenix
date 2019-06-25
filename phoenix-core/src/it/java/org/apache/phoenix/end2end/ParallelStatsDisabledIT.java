@@ -18,14 +18,37 @@
 
 package org.apache.phoenix.end2end;
 
+import com.google.common.collect.Maps;
+import org.apache.commons.lang.StringUtils;
 import org.apache.phoenix.query.BaseTest;
+import org.apache.phoenix.query.QueryServices;
+import org.apache.phoenix.util.QueryBuilder;
+import org.apache.phoenix.util.QueryUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.experimental.categories.Category;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Map;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+
+
 /**
- * Base class for tests whose methods run in parallel with statistics disabled.
+ * Base class for tests whose methods run in parallel with
+ * 1. Statistics enabled on server side (QueryServices#STATS_COLLECTION_ENABLED is true)
+ * 2. Guide Post Width for all relevant tables is 0. Stats are disabled at table level.
+ *
+ * See {@link org.apache.phoenix.schema.stats.NoOpStatsCollectorIT} for tests that disable
+ * stats collection from server side.
+ *
  * You must create unique names using {@link #generateUniqueName()} for each
  * table and sequence used to prevent collisions.
  */
@@ -33,12 +56,39 @@ import org.junit.experimental.categories.Category;
 public abstract class ParallelStatsDisabledIT extends BaseTest {
 
     @BeforeClass
-    public static final void doSetup() throws Exception {
-        setUpTestDriver(ReadOnlyProps.EMPTY_PROPS);
+    public static void doSetup() throws Exception {
+        Map<String, String> props = Maps.newHashMapWithExpectedSize(1);
+        setUpTestDriver(new ReadOnlyProps(props.entrySet().iterator()));
     }
 
     @AfterClass
     public static void tearDownMiniCluster() throws Exception {
         BaseTest.tearDownMiniClusterIfBeyondThreshold();
+    }
+
+    protected ResultSet executeQuery(Connection conn, QueryBuilder queryBuilder) throws SQLException {
+        PreparedStatement statement = conn.prepareStatement(queryBuilder.build());
+        ResultSet rs = statement.executeQuery();
+        return rs;
+    }
+
+    protected ResultSet executeQueryThrowsException(Connection conn, QueryBuilder queryBuilder,
+            String expectedPhoenixExceptionMsg, String expectedSparkExceptionMsg) {
+        ResultSet rs = null;
+        try {
+            rs = executeQuery(conn, queryBuilder);
+            fail();
+        }
+        catch(Exception e) {
+            assertTrue(e.getMessage().contains(expectedPhoenixExceptionMsg));
+        }
+        return rs;
+    }
+
+    protected void validateQueryPlan(Connection conn, QueryBuilder queryBuilder, String expectedPhoenixPlan, String expectedSparkPlan) throws SQLException {
+        if (StringUtils.isNotBlank(expectedPhoenixPlan)) {
+            ResultSet rs = conn.createStatement().executeQuery("EXPLAIN " + queryBuilder.build());
+            assertEquals(expectedPhoenixPlan, QueryUtil.getExplainPlan(rs));
+        }
     }
 }

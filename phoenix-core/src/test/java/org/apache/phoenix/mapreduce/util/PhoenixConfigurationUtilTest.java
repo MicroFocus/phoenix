@@ -25,6 +25,7 @@ import java.sql.DriverManager;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil.MRJobType;
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil.SchemaType;
 import org.apache.phoenix.query.BaseConnectionlessQueryTest;
 import org.apache.phoenix.util.PropertiesUtil;
@@ -145,7 +146,7 @@ public class PhoenixConfigurationUtilTest extends BaseConnectionlessQueryTest {
             configuration.set(HConstants.ZOOKEEPER_QUORUM, getUrl());
             PhoenixConfigurationUtil.setInputTableName(configuration, tableName);
             final String selectStatement = PhoenixConfigurationUtil.getSelectStatement(configuration);
-            final String expectedSelectStatement = "SELECT \"A_STRING\",\"A_BINARY\",\"0\".\"COL1\" FROM " + tableName ; 
+            final String expectedSelectStatement = "SELECT \"A_STRING\" , \"A_BINARY\" , \"0\".\"COL1\" FROM " + tableName ;
             assertEquals(expectedSelectStatement, selectStatement);
         } finally {
             conn.close();
@@ -167,7 +168,7 @@ public class PhoenixConfigurationUtilTest extends BaseConnectionlessQueryTest {
             configuration.set(HConstants.ZOOKEEPER_QUORUM, getUrl());
             PhoenixConfigurationUtil.setInputTableName(configuration, fullTableName);
             final String selectStatement = PhoenixConfigurationUtil.getSelectStatement(configuration);
-            final String expectedSelectStatement = "SELECT \"A_STRING\",\"A_BINARY\",\"0\".\"COL1\" FROM " + fullTableName; 
+            final String expectedSelectStatement = "SELECT \"A_STRING\" , \"A_BINARY\" , \"0\".\"COL1\" FROM " + fullTableName;
             assertEquals(expectedSelectStatement, selectStatement);
         } finally {
             conn.close();
@@ -209,7 +210,7 @@ public class PhoenixConfigurationUtilTest extends BaseConnectionlessQueryTest {
             PhoenixConfigurationUtil.setSchemaType(configuration, SchemaType.QUERY);
             PhoenixConfigurationUtil.setInputTableName(configuration, tableName);
             final String selectStatement = PhoenixConfigurationUtil.getSelectStatement(configuration);
-            final String expectedSelectStatement = "SELECT \"ID\",\"0\".\"VCARRAY\" FROM " + tableName ; 
+            final String expectedSelectStatement = "SELECT \"ID\" , \"0\".\"VCARRAY\" FROM " + tableName ;
             assertEquals(expectedSelectStatement, selectStatement);
         } finally {
             conn.close();
@@ -269,4 +270,20 @@ public class PhoenixConfigurationUtilTest extends BaseConnectionlessQueryTest {
         assertEquals(zkQuorumOverride3, OVERRIDE_CLUSTER_QUORUM);
 
     }
+
+    @Test
+    public void testMrJobTypeOverride() throws Exception {
+        final Job job = Job.getInstance();
+        Configuration configuration = job.getConfiguration();
+        MRJobType mrJobType = PhoenixConfigurationUtil.getMRJobType(configuration,
+                MRJobType.QUERY.name());
+        assertEquals(MRJobType.QUERY.name(), mrJobType.name());
+
+        PhoenixConfigurationUtil.setMRJobType(configuration, MRJobType.UPDATE_STATS);
+        mrJobType = PhoenixConfigurationUtil.getMRJobType(configuration,
+                MRJobType.QUERY.name());
+        assertEquals(MRJobType.UPDATE_STATS.name(), mrJobType.name());
+
+    }
+
 }

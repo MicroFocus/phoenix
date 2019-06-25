@@ -17,11 +17,14 @@
  */
 package org.apache.phoenix.end2end;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import com.google.common.collect.Lists;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.phoenix.jdbc.PhoenixConnection;
+import org.apache.phoenix.query.QueryServices;
+import org.apache.phoenix.util.PhoenixRuntime;
+import org.apache.phoenix.util.TestUtil;
+import org.junit.Test;
 
 import java.sql.Connection;
 import java.sql.Date;
@@ -31,23 +34,23 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-import java.util.Base64;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.util.PhoenixRuntime;
-import org.apache.phoenix.util.TestUtil;
-import org.junit.Test;
-
-import com.google.common.collect.Lists;
+import static org.apache.phoenix.util.PhoenixRuntime.TENANT_ID_ATTRIB;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 
 public class QueryMoreIT extends ParallelStatsDisabledIT {
+    
+    private final String TENANT_SPECIFIC_URL1 = getUrl() + ';' + TENANT_ID_ATTRIB + "=tenant1";
     
     private String dataTableName;
     //queryAgainstTenantSpecificView = true, dataTableSalted = true 
@@ -278,7 +281,7 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
                 values[i] = rs.getObject(i + 1);
             }
             conn = getTenantSpecificConnection(tenantId);
-            pkIds.add(Base64.getEncoder().encodeToString(PhoenixRuntime.encodeColumnValues(conn, tableOrViewName.toUpperCase(), values, columns)));
+            pkIds.add(Bytes.toString(Base64.getEncoder().encode(PhoenixRuntime.encodeColumnValues(conn, tableOrViewName.toUpperCase(), values, columns))));
         }
         return pkIds.toArray(new String[pkIds.size()]);
     }
@@ -372,9 +375,6 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
         }
     }
     
-    // FIXME: this repros PHOENIX-3382, but turned up two more issues:
-    // 1) PHOENIX-3383 Comparison between descending row keys used in RVC is reverse
-    // 2) PHOENIX-3384 Optimize RVC expressions for non leading row key columns
     @Test
     public void testRVCOnDescWithLeadingPKEquality() throws Exception {
         final Connection conn = DriverManager.getConnection(getUrl());
@@ -398,14 +398,11 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
         conn.createStatement().execute("UPSERT INTO " + fullTableName + " VALUES ('org1',1,'02')");
         conn.commit();
 
-        // FIXME: PHOENIX-3383
-        // This comparison is really backwards: it should be (score, entity_id) < (2, '04'),
-        // but because we're matching a descending key, our comparison has to be switched.
         try (Statement stmt = conn.createStatement()) {
             final ResultSet rs = stmt.executeQuery("SELECT entity_id, score\n" + 
                     "FROM " + fullTableName + "\n" + 
                     "WHERE organization_id = 'org1'\n" + 
-                    "AND (score, entity_id) > (2, '04')\n" + 
+                    "AND (score, entity_id) < (2, '04')\n" + 
                     "ORDER BY score DESC, entity_id DESC\n" + 
                     "LIMIT 3");
             assertTrue(rs.next());
@@ -416,13 +413,11 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
             assertEquals(1.0, rs.getDouble(2), 0.001);
             assertFalse(rs.next());
         }
-        // FIXME: PHOENIX-3384
-        // It should not be necessary to specify organization_id in this query
         try (Statement stmt = conn.createStatement()) {
             final ResultSet rs = stmt.executeQuery("SELECT entity_id, score\n" + 
                     "FROM " + fullTableName + "\n" + 
                     "WHERE organization_id = 'org1'\n" + 
-                    "AND (organization_id, score, entity_id) > ('org1', 2, '04')\n" + 
+                    "AND (organization_id, score, entity_id) < ('org1', 2, '04')\n" + 
                     "ORDER BY score DESC, entity_id DESC\n" + 
                     "LIMIT 3");
             assertTrue(rs.next());
@@ -497,15 +492,15 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
         upsertRows(connection, fullTableName);
         connection.commit();
         assertEquals(2L, connection.getMutationState().getBatchCount());
-        
-        // set the batch size (rows) to 1 
-        connectionProperties.setProperty(QueryServices.MUTATE_BATCH_SIZE_ATTRIB, "1");
+
+        // set the batch size (rows) to 2 since three are at least 2 mutations when updates a single row
+        connectionProperties.setProperty(QueryServices.MUTATE_BATCH_SIZE_ATTRIB, "2");
         connectionProperties.setProperty(QueryServices.MUTATE_BATCH_SIZE_BYTES_ATTRIB, "128");
         connection = (PhoenixConnection) DriverManager.getConnection(getUrl(), connectionProperties);
         upsertRows(connection, fullTableName);
         connection.commit();
         // each row should be in its own batch
-        assertEquals(4L, connection.getMutationState().getBatchCount());
+        assertEquals(2L, connection.getMutationState().getBatchCount());
     }
     
     private void upsertRows(PhoenixConnection conn, String fullTableName) throws SQLException {
@@ -518,4 +513,148 @@ public class QueryMoreIT extends ParallelStatsDisabledIT {
             stmt.execute();
         }
     }
+
+    @Test public void testRVCWithDescAndAscendingPK() throws Exception {
+        final Connection conn = DriverManager.getConnection(getUrl());
+        String fullTableName = generateUniqueName();
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("CREATE TABLE " + fullTableName + "(\n"
+                    + "    ORGANIZATION_ID CHAR(15) NOT NULL,\n" + "    SCORE VARCHAR NOT NULL,\n"
+                    + "    ENTITY_ID VARCHAR NOT NULL\n"
+                    + "    CONSTRAINT PAGE_SNAPSHOT_PK PRIMARY KEY (\n"
+                    + "        ORGANIZATION_ID,\n" + "        SCORE DESC,\n" + "        ENTITY_ID\n"
+                    + "    )\n" + ") MULTI_TENANT=TRUE");
+        }
+
+        conn.createStatement().execute("UPSERT INTO " + fullTableName + " VALUES ('org1','c','1')");
+        conn.createStatement().execute("UPSERT INTO " + fullTableName + " VALUES ('org1','b','3')");
+        conn.createStatement().execute("UPSERT INTO " + fullTableName + " VALUES ('org1','b','4')");
+        conn.createStatement().execute("UPSERT INTO " + fullTableName + " VALUES ('org1','a','2')");
+        conn.commit();
+
+        try (Statement stmt = conn.createStatement()) {
+            final ResultSet
+                    rs =
+                    stmt.executeQuery("SELECT score, entity_id \n" + "FROM " + fullTableName + "\n"
+                            + "WHERE organization_id = 'org1'\n"
+                            + "AND (score, entity_id) < ('b', '4')\n"
+                            + "ORDER BY score DESC, entity_id\n" + "LIMIT 3");
+            assertTrue(rs.next());
+            assertEquals("b", rs.getString(1));
+            assertEquals("3", rs.getString(2));
+            assertTrue(rs.next());
+            assertEquals("a", rs.getString(1));
+            assertEquals("2", rs.getString(2));
+            assertFalse(rs.next());
+        }
+    }
+
+    @Test
+    public void testRVCOnTenantViewThroughGlobalIdxOrderByDesc() throws Exception {
+        String fullTableName = generateUniqueName();
+        String fullViewName = generateUniqueName();
+        String tenantView = generateUniqueName();
+        String indexName = generateUniqueName();
+        // create base table and global view using global connection
+        try (Connection conn = DriverManager.getConnection(getUrl())) {
+            Statement stmt = conn.createStatement();
+            stmt.execute(
+                    "CREATE TABLE " + fullTableName + "(\n"
+                            + "    TENANT_ID CHAR(15) NOT NULL,\n"
+                            + "    KEY_PREFIX CHAR(3) NOT NULL,\n"
+                            + "    CREATED_DATE DATE,\n"
+                            + "    CREATED_BY CHAR(15),\n"
+                            + "    SYSTEM_MODSTAMP DATE\n"
+                            + "    CONSTRAINT PK PRIMARY KEY (\n"
+                            + "       TENANT_ID,"
+                            + "       KEY_PREFIX\n"
+                            + ")) MULTI_TENANT=TRUE");
+
+            stmt.execute("CREATE VIEW " + fullViewName + "(\n"
+                    + "    DATE_TIME1 DATE NOT NULL,\n"
+                    + "    TEXT2 VARCHAR,\n"
+                    + "    DOUBLE1 DECIMAL(12, 3),\n"
+                    + "    IS_BOOLEAN BOOLEAN,\n"
+                    + "    RELATIONSHIP_ID CHAR(15),\n"
+                    + "    TEXT1 VARCHAR,\n"
+                    + "    TEXT_READ_ONLY VARCHAR,\n"
+                    + "    JSON1 VARCHAR,\n"
+                    + "    IP_START_ADDRESS VARCHAR,\n"
+                    + "    CONSTRAINT PKVIEW PRIMARY KEY\n"
+                    + "    (\n"
+                    + "        DATE_TIME1, TEXT2, TEXT1\n"
+                    + "    )) AS SELECT * FROM " + fullTableName
+                    + "    WHERE KEY_PREFIX = '0CY'");
+
+            stmt.execute("CREATE INDEX " + indexName + " " + "ON " + fullViewName
+                    + " (TEXT1 DESC, TEXT2)\n"
+                    + "INCLUDE (CREATED_BY,\n"
+                    + "    RELATIONSHIP_ID,\n"
+                    + "    JSON1,\n"
+                    + "    DOUBLE1,\n"
+                    + "    IS_BOOLEAN,\n"
+                    + "    IP_START_ADDRESS,\n"
+                    + "    CREATED_DATE,\n"
+                    + "    SYSTEM_MODSTAMP,\n"
+                    + "    TEXT_READ_ONLY)");
+        }
+
+        // create and use an tenant specific view to write data
+        try (Connection viewConn = DriverManager.getConnection(TENANT_SPECIFIC_URL1)) {
+            Statement stmt = viewConn.createStatement();
+            stmt.execute("CREATE VIEW IF NOT EXISTS " + tenantView + " AS SELECT * FROM "
+                    + fullViewName);
+            viewConn.createStatement().execute("UPSERT INTO " + tenantView
+                    + "(DATE_TIME1, TEXT1, TEXT2) "
+                    + " VALUES (TO_DATE('2017-10-16 22:00:00', 'yyyy-MM-dd HH:mm:ss'), 'd', '1')");
+            viewConn.createStatement().execute("UPSERT INTO " + tenantView
+                    + "(DATE_TIME1, TEXT1, TEXT2) "
+                    + " VALUES (TO_DATE('2017-10-16 22:00:00', 'yyyy-MM-dd HH:mm:ss'), 'c', '2')");
+            viewConn.createStatement().execute("UPSERT INTO " + tenantView
+                    + "(DATE_TIME1, TEXT1, TEXT2) "
+                    + " VALUES (TO_DATE('2017-10-16 22:00:00', 'yyyy-MM-dd HH:mm:ss'), 'b', '3')");
+            viewConn.createStatement().execute("UPSERT INTO " + tenantView
+                    + "(DATE_TIME1, TEXT1, TEXT2) "
+                    + " VALUES (TO_DATE('2017-10-16 22:00:00', 'yyyy-MM-dd HH:mm:ss'), 'b', '4')");
+            viewConn.createStatement().execute("UPSERT INTO " + tenantView
+                    + "(DATE_TIME1, TEXT1, TEXT2) "
+                    + " VALUES (TO_DATE('2017-10-16 22:00:00', 'yyyy-MM-dd HH:mm:ss'), 'a', '4')");
+            viewConn.commit();
+
+            // query using desc order by so that the index is used
+            ResultSet
+                    rs =
+                    stmt.executeQuery("SELECT TEXT1, TEXT2 FROM " + tenantView
+                            + " WHERE (TEXT1, TEXT2) > ('b', '3') ORDER BY TEXT1 DESC, TEXT2");
+            assertTrue(rs.next());
+            assertEquals("d", rs.getString(1));
+            assertEquals("1", rs.getString(2));
+            assertTrue(rs.next());
+            assertEquals("c", rs.getString(1));
+            assertEquals("2", rs.getString(2));
+            assertTrue(rs.next());
+            assertEquals("b", rs.getString(1));
+            assertEquals("4", rs.getString(2));
+            assertFalse(rs.next());
+        }
+
+        // validate that running query using global view gives same results
+        try (Connection conn = DriverManager.getConnection(getUrl())) {
+            ResultSet
+                    rs =
+                    conn.createStatement().executeQuery("SELECT TEXT1, TEXT2 FROM " + fullViewName
+                            + " WHERE (TEXT1, TEXT2) > ('b', '3') ORDER BY TEXT1 DESC, TEXT2");
+            assertTrue(rs.next());
+            assertEquals("d", rs.getString(1));
+            assertEquals("1", rs.getString(2));
+            assertTrue(rs.next());
+            assertEquals("c", rs.getString(1));
+            assertEquals("2", rs.getString(2));
+            assertTrue(rs.next());
+            assertEquals("b", rs.getString(1));
+            assertEquals("4", rs.getString(2));
+            assertFalse(rs.next());
+        }
+    }
+
 }

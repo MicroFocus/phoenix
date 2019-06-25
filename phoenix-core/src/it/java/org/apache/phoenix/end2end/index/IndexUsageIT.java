@@ -35,6 +35,7 @@ import java.sql.SQLException;
 import java.util.Properties;
 
 import org.apache.phoenix.end2end.ParallelStatsDisabledIT;
+import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.execute.CommitException;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.util.DateUtil;
@@ -496,7 +497,7 @@ public class IndexUsageIT extends ParallelStatsDisabledIT {
 	            assertEquals("CLIENT PARALLEL 1-WAY RANGE SCAN OVER " + dataTableName + " [1,173]\n" + "CLIENT MERGE SORT",
 	                    queryPlan);
 	        } else {
-	            assertEquals("CLIENT PARALLEL 1-WAY RANGE SCAN OVER _IDX_" + dataTableName + " [" + Short.MIN_VALUE + ",173]", queryPlan);
+	            assertEquals("CLIENT PARALLEL 1-WAY RANGE SCAN OVER _IDX_" + dataTableName + " [" + Long.MIN_VALUE + ",173]", queryPlan);
 	        }
 	        rs = conn.createStatement().executeQuery(query);
 	        assertTrue(rs.next());
@@ -516,7 +517,7 @@ public class IndexUsageIT extends ParallelStatsDisabledIT {
 	                    + ",'foo2_bar2']\n" + "    SERVER FILTER BY FIRST KEY ONLY\n" + "CLIENT MERGE SORT",
 	                    QueryUtil.getExplainPlan(rs));
 	        } else {
-	            assertEquals("CLIENT PARALLEL 1-WAY RANGE SCAN OVER _IDX_" + dataTableName + " [" + (Short.MIN_VALUE + 1) + ",'foo2_bar2']\n"
+	            assertEquals("CLIENT PARALLEL 1-WAY RANGE SCAN OVER _IDX_" + dataTableName + " [" + (Long.MIN_VALUE + 1) + ",'foo2_bar2']\n"
 	                    + "    SERVER FILTER BY FIRST KEY ONLY", QueryUtil.getExplainPlan(rs));
 	        }
 	        rs = conn.createStatement().executeQuery(query);
@@ -772,4 +773,43 @@ public class IndexUsageIT extends ParallelStatsDisabledIT {
         }
 	}
 
+    @Test
+    public void testIndexNotFoundForWrongIndexNameRebuild() throws Exception{
+        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
+        Connection conn = DriverManager.getConnection(getUrl(), props);
+        String dataTableName = generateUniqueName();
+        String wrongIndexName = generateUniqueName();
+
+        try {
+            conn.createStatement().execute("CREATE TABLE " + dataTableName +
+                            " (k VARCHAR NOT NULL PRIMARY KEY, v VARCHAR)");
+
+            conn.createStatement().execute(
+                    "ALTER INDEX " + wrongIndexName + " ON " + dataTableName + " rebuild");
+
+        }catch (SQLException e) {
+            assertEquals(e.getErrorCode(), SQLExceptionCode.INDEX_UNDEFINED.getErrorCode());
+        } finally {
+            conn.close();
+        }
+    }
+
+    @Test
+    public void testIndexNotFoundForDropWongIndexName() throws Exception{
+        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
+        Connection conn = DriverManager.getConnection(getUrl(), props);
+        String dataTableName = generateUniqueName();
+        String wrongIndexName = generateUniqueName();
+
+        try {
+            conn.createStatement().execute("CREATE TABLE " + dataTableName +
+                    " (k VARCHAR NOT NULL PRIMARY KEY, v VARCHAR)");
+            conn.createStatement().execute("DROP INDEX " + wrongIndexName + " ON " +
+                    dataTableName);
+        }catch (SQLException e) {
+            assertEquals(e.getErrorCode(), SQLExceptionCode.INDEX_UNDEFINED.getErrorCode());
+        } finally {
+            conn.close();
+        }
+    }
 }

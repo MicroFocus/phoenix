@@ -19,7 +19,9 @@ package org.apache.phoenix.end2end;
 
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CATALOG_SCHEMA;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CATALOG_TABLE;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CHILD_LINK_TABLE;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_FUNCTION_TABLE;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_MUTEX_TABLE_NAME;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.TYPE_SEQUENCE;
 import static org.apache.phoenix.util.TestUtil.ATABLE_NAME;
 import static org.apache.phoenix.util.TestUtil.CUSTOM_ENTITY_DATA_FULL_NAME;
@@ -165,6 +167,10 @@ public class QueryDatabaseMetaDataIT extends ParallelStatsDisabledIT {
             assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
             assertTrue(rs.next());
             assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
+            assertEquals(SYSTEM_CHILD_LINK_TABLE, rs.getString("TABLE_NAME"));
+            assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
+            assertTrue(rs.next());
+            assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
             assertEquals(SYSTEM_FUNCTION_TABLE, rs.getString("TABLE_NAME"));
             assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
             assertTrue(rs.next());
@@ -173,11 +179,18 @@ public class QueryDatabaseMetaDataIT extends ParallelStatsDisabledIT {
             assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
             assertTrue(rs.next());
             assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
+            assertEquals(SYSTEM_MUTEX_TABLE_NAME, rs.getString("TABLE_NAME"));
+            assertTrue(rs.next());
+            assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
             assertEquals(TYPE_SEQUENCE, rs.getString("TABLE_NAME"));
             assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
             assertTrue(rs.next());
             assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
             assertEquals(PhoenixDatabaseMetaData.SYSTEM_STATS_TABLE, rs.getString("TABLE_NAME"));
+            assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
+            assertTrue(rs.next());
+            assertEquals(SYSTEM_CATALOG_SCHEMA, rs.getString("TABLE_SCHEM"));
+            assertEquals(PhoenixDatabaseMetaData.SYSTEM_TASK_TABLE, rs.getString("TABLE_NAME"));
             assertEquals(PTableType.SYSTEM.toString(), rs.getString("TABLE_TYPE"));
             assertTrue(rs.next());
             assertEquals(null, rs.getString("TABLE_SCHEM"));
@@ -345,7 +358,7 @@ public class QueryDatabaseMetaDataIT extends ParallelStatsDisabledIT {
     @Test
     public void testSchemaMetadataScan() throws SQLException {
         String table1 = generateUniqueName();
-        String schema1 = generateUniqueName();
+        String schema1 = "Z_" + generateUniqueName();
         String fullTable1 = schema1 + "." + table1;
         ensureTableCreated(getUrl(), fullTable1, CUSTOM_ENTITY_DATA_FULL_NAME, null);
         String fullTable2 = generateUniqueName();
@@ -756,24 +769,27 @@ public class QueryDatabaseMetaDataIT extends ParallelStatsDisabledIT {
             }
             admin.createTable(builder.build());
             createMDTestTable(pconn, tableName,
-                "a." + ColumnFamilyDescriptorBuilder.KEEP_DELETED_CELLS + "=" + Boolean.TRUE);
+                "a." + ColumnFamilyDescriptorBuilder.BLOCKSIZE+ "=" + 50000);
 
             TableDescriptor descriptor = admin.getDescriptor(TableName.valueOf(htableName));
             assertEquals(3, descriptor.getColumnFamilies().length);
             ColumnFamilyDescriptor cdA = descriptor.getColumnFamily(cfA);
-            assertNotEquals(ColumnFamilyDescriptorBuilder.DEFAULT_KEEP_DELETED, cdA.getKeepDeletedCells());
+            assertEquals(ColumnFamilyDescriptorBuilder.DEFAULT_KEEP_DELETED, cdA.getKeepDeletedCells());
+            assertNotEquals(ColumnFamilyDescriptorBuilder.DEFAULT_BLOCKSIZE, cdA.getBlocksize());
             assertEquals(DataBlockEncoding.NONE, cdA.getDataBlockEncoding()); // Overriden using
                                                                               // WITH
             assertEquals(1, cdA.getMaxVersions());// Overriden using WITH
             ColumnFamilyDescriptor cdB = descriptor.getColumnFamily(cfB);
             // Allow KEEP_DELETED_CELLS to be false for VIEW
             assertEquals(ColumnFamilyDescriptorBuilder.DEFAULT_KEEP_DELETED, cdB.getKeepDeletedCells());
+            assertEquals(ColumnFamilyDescriptorBuilder.DEFAULT_BLOCKSIZE, cdB.getBlocksize());
             assertEquals(DataBlockEncoding.NONE, cdB.getDataBlockEncoding()); // Should keep the
                                                                               // original value.
             // CF c should stay the same since it's not a Phoenix cf.
             ColumnFamilyDescriptor cdC = descriptor.getColumnFamily(cfC);
             assertNotNull("Column family not found", cdC);
             assertEquals(ColumnFamilyDescriptorBuilder.DEFAULT_KEEP_DELETED, cdC.getKeepDeletedCells());
+            assertEquals(ColumnFamilyDescriptorBuilder.DEFAULT_BLOCKSIZE, cdC.getBlocksize());
             assertFalse(SchemaUtil.DEFAULT_DATA_BLOCK_ENCODING == cdC.getDataBlockEncoding());
             assertTrue(descriptor.hasCoprocessor(UngroupedAggregateRegionObserver.class.getName()));
             assertTrue(descriptor.hasCoprocessor(GroupedAggregateRegionObserver.class.getName()));
@@ -1095,7 +1111,7 @@ public class QueryDatabaseMetaDataIT extends ParallelStatsDisabledIT {
         // Retrieve the database metadata
         DatabaseMetaData dbmd = conn.getMetaData();
         ResultSet rs = dbmd.getColumns(null, null, null, null);
-        rs.next();
+        assertTrue(rs.next());
 
         // Lookup column by name, this should return null but not throw an exception
         String remarks = rs.getString("REMARKS");
