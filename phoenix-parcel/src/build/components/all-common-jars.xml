@@ -28,6 +28,7 @@
       <outputDirectory>${parcel.folder}/lib/phoenix/</outputDirectory>
       <includes>
         <include>phoenix-*-client.jar</include>
+        <include>phoenix-client-*.jar</include>
       </includes>
       <excludes>
         <exclude>*-minimal.jar</exclude>
