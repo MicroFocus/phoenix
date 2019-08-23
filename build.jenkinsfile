@@ -1,0 +1,31 @@
+#!/usr/bin/groovy
+@Library('intersetLib') _
+
+properties([
+    parameters([
+        string(defaultValue: params.BRANCH_NAME, description: 'Branch of git repo to get jenkinsfile from', name: 'BRANCH_NAME'),
+    ])
+])
+
+node("ops") {
+    stage('Cloning Repo') {
+        git branch: params.BRANCH_NAME, credentialsId: 'interset-readonly', url: 'git@github.com:Filetrek/phoenix.git'
+    }
+
+    stage('Building Phoenix Parcel') {
+       withCredentials([file(credentialsId: 'm2_settings.xml_password', variable: 'M2_SETTING')]) {
+            sh "mkdir -p ~/.m2 && cp -f $M2_SETTING ~/.m2/settings.xml"
+            sh "mvn -DskipTests clean package"
+            sh '''
+                for x in `find $WORKSPACE -name *el?.parcel`; do
+                    sha1sum $x | cut -d ' ' -f 1 > $x.sha
+                done
+                find $WORKSPACE
+            '''
+       }
+    }
+
+    stage('Archiving Artifacts') {
+       archiveArtifacts '**/target/*.jar,**/target/*el6.parcel*,**/target/*el7.parcel*,**/manifest.json'
+    }
+}
