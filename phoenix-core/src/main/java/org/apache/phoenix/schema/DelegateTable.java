@@ -23,6 +23,7 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.hbase.index.util.KeyValueBuilder;
 import org.apache.phoenix.index.IndexMaintainer;
 import org.apache.phoenix.jdbc.PhoenixConnection;
+import org.apache.phoenix.schema.types.PDataType;
 import org.apache.phoenix.transaction.TransactionFactory;
 
 public class DelegateTable implements PTable {
@@ -79,6 +80,11 @@ public class DelegateTable implements PTable {
     @Override
     public List<PColumn> getColumns() {
         return delegate.getColumns();
+    }
+    
+    @Override
+    public List<PColumn> getExcludedColumns() {
+        return delegate.getExcludedColumns();
     }
 
     @Override
@@ -207,8 +213,13 @@ public class DelegateTable implements PTable {
     }
 
     @Override
-    public Short getViewIndexId() {
+    public Long getViewIndexId() {
         return delegate.getViewIndexId();
+    }
+
+    @Override
+    public PDataType getviewIndexIdType() {
+        return delegate.getviewIndexIdType();
     }
 
     @Override
@@ -320,5 +331,13 @@ public class DelegateTable implements PTable {
     @Override
     public Boolean useStatsForParallelization() {
         return delegate.useStatsForParallelization();
+    }
+
+    @Override public boolean hasViewModifiedUpdateCacheFrequency() {
+        return delegate.hasViewModifiedUpdateCacheFrequency();
+    }
+
+    @Override public boolean hasViewModifiedUseStatsForParallelization() {
+        return delegate.hasViewModifiedUseStatsForParallelization();
     }
 }

@@ -17,9 +17,11 @@
  */
 package org.apache.phoenix.mapreduce;
 
+import java.util.Base64;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import java.util.Base64;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.query.QueryServices;
@@ -68,7 +70,7 @@ public class CsvBulkImportUtil {
 
     @VisibleForTesting
     static void setChar(Configuration conf, String confKey, char charValue) {
-        conf.set(confKey, Base64.getEncoder().encodeToString(Character.toString(charValue).getBytes()));
+        conf.set(confKey, Bytes.toString(Base64.getEncoder().encode(Character.toString(charValue).getBytes())));
     }
 
     @VisibleForTesting

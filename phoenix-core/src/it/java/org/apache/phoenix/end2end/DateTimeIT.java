@@ -51,15 +51,23 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.text.Format;
+import java.time.LocalDate;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.Properties;
+import java.util.TimeZone;
 
+import org.apache.commons.lang3.time.FastDateFormat;
 import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.phoenix.compile.StatementContext;
+import org.apache.phoenix.jdbc.PhoenixConnection;
+import org.apache.phoenix.jdbc.PhoenixStatement;
 import org.apache.phoenix.query.QueryConstants;
+import org.apache.phoenix.schema.types.PDataType;
 import org.apache.phoenix.schema.types.PDate;
+import org.apache.phoenix.schema.types.PTime;
 import org.apache.phoenix.schema.types.PTimestamp;
 import org.apache.phoenix.util.ByteUtil;
 import org.apache.phoenix.util.DateUtil;
@@ -1816,6 +1824,33 @@ public class DateTimeIT extends ParallelStatsDisabledIT {
         }
     }
 
+    @Test
+    public void testCastTimeStampToDate() throws Exception {
+        String tablename = generateUniqueName();
+        String ddl = "CREATE TABLE IF NOT EXISTS " + tablename +
+                " (PK INTEGER PRIMARY KEY, A_TIMESTAMP TIMESTAMP)";
+        Properties props = new Properties();
+        props.setProperty("phoenix.query.dateFormatTimeZone", TimeZone.getDefault().toString());
+        Connection conn = DriverManager.getConnection(getUrl(), props);
+        conn.createStatement().execute(ddl);
+
+        String localTime = LocalDate.now().toString();
+        conn.createStatement().execute("UPSERT INTO " + tablename +
+                " VALUES(1,TO_TIMESTAMP('"+ localTime + "'))");
+
+        conn.setAutoCommit(true);
+        try {
+            PreparedStatement statement =
+                    conn.prepareStatement("SELECT CAST(A_TIMESTAMP AS DATE) as A_DATE FROM " + tablename);
+
+            ResultSet rs = statement.executeQuery();
+            assertTrue (rs.next());
+            assertTrue (rs.getString(1).contains(localTime));
+            assertFalse (rs.next());
+        } finally {
+            conn.close();
+        }
+    }
 
     @Test
     public void testTimestamp() throws Exception {
@@ -1879,5 +1914,75 @@ public class DateTimeIT extends ParallelStatsDisabledIT {
         } finally {
             conn.close();
         }
+    }
+
+    @Test
+    public void testDateFormatTimeZone()throws Exception {
+        String[] timeZoneIDs = {DateUtil.DEFAULT_TIME_ZONE_ID, "Asia/Yerevan", "Australia/Adelaide", "Asia/Tokyo"};
+        for (String timeZoneID : timeZoneIDs) {
+            testDateFormatTimeZone(timeZoneID);
+        }
+    }
+
+    public void testDateFormatTimeZone(String timeZoneId) throws Exception {
+        Properties props = new Properties();
+        props.setProperty("phoenix.query.dateFormatTimeZone", timeZoneId);
+        Connection conn1 = DriverManager.getConnection(getUrl(), props);
+
+        String tableName = generateUniqueName();
+        String ddl = "CREATE TABLE IF NOT EXISTS " + tableName +
+                " (k1 INTEGER PRIMARY KEY," +
+                " v_date DATE," +
+                " v_time TIME," +
+                " v_timestamp TIMESTAMP)";
+        try {
+            conn1.createStatement().execute(ddl);
+
+            PhoenixConnection pConn = conn1.unwrap(PhoenixConnection.class);
+            verifyTimeZoneIDWithConn(pConn, PDate.INSTANCE, timeZoneId);
+            verifyTimeZoneIDWithConn(pConn, PTime.INSTANCE, timeZoneId);
+            verifyTimeZoneIDWithConn(pConn, PTimestamp.INSTANCE, timeZoneId);
+
+            Calendar cal = Calendar.getInstance(TimeZone.getTimeZone(timeZoneId));
+            cal.setTime(date);
+            String dateStr = DateUtil.getDateFormatter(DateUtil.DEFAULT_MS_DATE_FORMAT).format(date);
+
+            String dml = "UPSERT INTO " + tableName + " VALUES (" +
+                    "1," +
+                    "'" + dateStr + "'," +
+                    "'" + dateStr + "'," +
+                    "'" + dateStr + "'" +
+                    ")";
+            conn1.createStatement().execute(dml);
+            conn1.commit();
+
+            PhoenixStatement stmt = conn1.createStatement().unwrap(PhoenixStatement.class);
+            ResultSet rs = stmt.executeQuery("SELECT v_date, v_time, v_timestamp FROM " + tableName);
+
+            assertTrue(rs.next());
+            assertEquals(rs.getDate(1).toString(), new Date(cal.getTimeInMillis()).toString());
+            assertEquals(rs.getTime(2).toString(), new Time(cal.getTimeInMillis()).toString());
+            assertEquals(rs.getTimestamp(3).getTime(), cal.getTimeInMillis());
+            assertFalse(rs.next());
+
+            StatementContext stmtContext = stmt.getQueryPlan().getContext();
+            verifyTimeZoneIDWithFormatter(stmtContext.getDateFormatter(), timeZoneId);
+            verifyTimeZoneIDWithFormatter(stmtContext.getTimeFormatter(), timeZoneId);
+            verifyTimeZoneIDWithFormatter(stmtContext.getTimestampFormatter(), timeZoneId);
+
+            stmt.close();
+        } finally {
+            conn1.close();
+        }
+    }
+
+    private void verifyTimeZoneIDWithConn(PhoenixConnection conn, PDataType dataType, String timeZoneId) {
+        Format formatter = conn.getFormatter(dataType);
+        verifyTimeZoneIDWithFormatter(formatter, timeZoneId);
+    }
+
+    private void verifyTimeZoneIDWithFormatter(Format formatter, String timeZoneId) {
+        assertTrue(formatter instanceof FastDateFormat);
+        assertEquals(((FastDateFormat)formatter).getTimeZone().getID(), timeZoneId);
     }
 }

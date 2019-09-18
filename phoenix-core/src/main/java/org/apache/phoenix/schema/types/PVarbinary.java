@@ -19,8 +19,8 @@ package org.apache.phoenix.schema.types;
 
 import java.sql.Types;
 import java.text.Format;
-
 import java.util.Base64;
+
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.util.ByteUtil;

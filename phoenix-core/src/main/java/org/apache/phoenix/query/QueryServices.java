@@ -19,7 +19,8 @@ package org.apache.phoenix.query;
 
 import java.util.concurrent.ThreadPoolExecutor;
 
-import org.apache.http.annotation.Immutable;
+import net.jcip.annotations.Immutable;
+
 import org.apache.phoenix.iterate.SpoolTooBigToDiskException;
 import org.apache.phoenix.memory.MemoryManager;
 import org.apache.phoenix.optimize.QueryOptimizer;
@@ -43,7 +44,16 @@ public interface QueryServices extends SQLCloseable {
     public static final String THREAD_POOL_SIZE_ATTRIB = "phoenix.query.threadPoolSize";
     public static final String QUEUE_SIZE_ATTRIB = "phoenix.query.queueSize";
     public static final String THREAD_TIMEOUT_MS_ATTRIB = "phoenix.query.timeoutMs";
-    public static final String SPOOL_THRESHOLD_BYTES_ATTRIB = "phoenix.query.spoolThresholdBytes";
+    public static final String SERVER_SPOOL_THRESHOLD_BYTES_ATTRIB =
+            "phoenix.query.server.spoolThresholdBytes";
+    public static final String CLIENT_SPOOL_THRESHOLD_BYTES_ATTRIB =
+            "phoenix.query.client.spoolThresholdBytes";
+    public static final String CLIENT_ORDERBY_SPOOLING_ENABLED_ATTRIB =
+            "phoenix.query.client.orderBy.spooling.enabled";
+    public static final String CLIENT_JOIN_SPOOLING_ENABLED_ATTRIB =
+            "phoenix.query.client.join.spooling.enabled";
+    public static final String SERVER_ORDERBY_SPOOLING_ENABLED_ATTRIB =
+            "phoenix.query.server.orderBy.spooling.enabled";
     public static final String HBASE_CLIENT_KEYTAB = "hbase.myclient.keytab";
     public static final String HBASE_CLIENT_PRINCIPAL = "hbase.myclient.principal";
     public static final String SPOOL_DIRECTORY = "phoenix.spool.directory";
@@ -90,6 +100,7 @@ public interface QueryServices extends SQLCloseable {
     public static final String MUTATE_BATCH_SIZE_ATTRIB = "phoenix.mutate.batchSize";
     public static final String MUTATE_BATCH_SIZE_BYTES_ATTRIB = "phoenix.mutate.batchSizeBytes";
     public static final String MAX_SERVER_CACHE_TIME_TO_LIVE_MS_ATTRIB = "phoenix.coprocessor.maxServerCacheTimeToLiveMs";
+    public static final String MAX_SERVER_CACHE_PERSISTENCE_TIME_TO_LIVE_MS_ATTRIB = "phoenix.coprocessor.maxServerCachePersistenceTimeToLiveMs";
     
     @Deprecated // Use FORCE_ROW_KEY_ORDER instead.
     public static final String ROW_KEY_ORDER_SALTED_TABLE_ATTRIB  = "phoenix.query.rowKeyOrderSaltedTable";
@@ -152,6 +163,7 @@ public interface QueryServices extends SQLCloseable {
     public static final String INDEX_FAILURE_BLOCK_WRITE = "phoenix.index.failure.block.write";
     public static final String INDEX_FAILURE_DISABLE_INDEX = "phoenix.index.failure.disable.index";
     public static final String INDEX_FAILURE_THROW_EXCEPTION_ATTRIB = "phoenix.index.failure.throw.exception";
+    public static final String INDEX_FAILURE_KILL_SERVER = "phoenix.index.failure.unhandled.killserver";
 
     // Index will be partially re-built from index disable time stamp - following overlap time
     @Deprecated
@@ -189,16 +201,15 @@ public interface QueryServices extends SQLCloseable {
     public static final String STATS_GUIDEPOST_PER_REGION_ATTRIB = "phoenix.stats.guidepost.per.region";
     public static final String STATS_USE_CURRENT_TIME_ATTRIB = "phoenix.stats.useCurrentTime";
     
-    @Deprecated // use STATS_COLLECTION_ENABLED config instead
-    public static final String STATS_ENABLED_ATTRIB = "phoenix.stats.enabled";
-
     public static final String RUN_UPDATE_STATS_ASYNC = "phoenix.update.stats.command.async";
     public static final String STATS_SERVER_POOL_SIZE = "phoenix.stats.pool.size";
     public static final String COMMIT_STATS_ASYNC = "phoenix.stats.commit.async";
     // Maximum size in bytes taken up by cached table stats in the client
     public static final String STATS_MAX_CACHE_SIZE = "phoenix.stats.cache.maxSize";
-    public static final String LOG_SALT_BUCKETS_ATTRIB = "phoenix.log.saltBuckets";
+    // The size of the thread pool used for refreshing cached table stats in stats client cache
+    public static final String STATS_CACHE_THREAD_POOL_SIZE = "phoenix.stats.cache.threadPoolSize";
 
+    public static final String LOG_SALT_BUCKETS_ATTRIB = "phoenix.log.saltBuckets";
     public static final String SEQUENCE_SALT_BUCKETS_ATTRIB = "phoenix.sequence.saltBuckets";
     public static final String COPROCESSOR_PRIORITY_ATTRIB = "phoenix.coprocessor.priority";
     public static final String EXPLAIN_CHUNK_COUNT_ATTRIB = "phoenix.explain.displayChunkCount";
@@ -210,6 +221,9 @@ public interface QueryServices extends SQLCloseable {
     public static final String DEFAULT_TABLE_ISTRANSACTIONAL_ATTRIB = "phoenix.table.istransactional.default";
     public static final String DEFAULT_TRANSACTION_PROVIDER_ATTRIB = "phoenix.table.transaction.provider.default";
     public static final String GLOBAL_METRICS_ENABLED = "phoenix.query.global.metrics.enabled";
+
+    // Tag Name to determine the Phoenix Client Type
+    public static final String CLIENT_METRICS_TAG = "phoenix.client.metrics.tag";
     
     // Transaction related configs
     public static final String TRANSACTIONS_ENABLED = "phoenix.transactions.enabled";
@@ -250,6 +264,8 @@ public interface QueryServices extends SQLCloseable {
     public static final String QUERY_SERVER_KERBEROS_ALLOWED_REALMS = "phoenix.queryserver.kerberos.allowed.realms";
     public static final String QUERY_SERVER_SPNEGO_AUTH_DISABLED_ATTRIB = "phoenix.queryserver.spnego.auth.disabled";
     public static final String QUERY_SERVER_WITH_REMOTEUSEREXTRACTOR_ATTRIB = "phoenix.queryserver.withRemoteUserExtractor";
+    public static final String QUERY_SERVER_CUSTOMIZERS_ENABLED = "phoenix.queryserver.customizers.enabled";
+    public static final String QUERY_SERVER_CUSTOM_AUTH_ENABLED = "phoenix.queryserver.custom.auth.enabled";
     public static final String QUERY_SERVER_REMOTEUSEREXTRACTOR_PARAM = "phoenix.queryserver.remoteUserExtractor.param";
     public static final String QUERY_SERVER_DISABLE_KERBEROS_LOGIN = "phoenix.queryserver.disable.kerberos.login";
 
@@ -302,16 +318,54 @@ public interface QueryServices extends SQLCloseable {
     // whether to enable server side RS -> RS calls for upsert select statements
     public static final String ENABLE_SERVER_UPSERT_SELECT ="phoenix.client.enable.server.upsert.select";
 
+    public static final String PROPERTY_POLICY_PROVIDER_ENABLED = "phoenix.property.policy.provider.enabled";
+
+    // whether to trigger mutations on the server at all (UPSERT/DELETE or DELETE FROM)
+    public static final String ENABLE_SERVER_SIDE_DELETE_MUTATIONS ="phoenix.client.enable.server.delete.mutations";
+    public static final String ENABLE_SERVER_SIDE_UPSERT_MUTATIONS ="phoenix.client.enable.server.upsert.mutations";
+
     //Update Cache Frequency default config attribute
     public static final String DEFAULT_UPDATE_CACHE_FREQUENCY_ATRRIB  = "phoenix.default.update.cache.frequency";
 
     // Whether to enable cost-based-decision in the query optimizer
     public static final String COST_BASED_OPTIMIZER_ENABLED = "phoenix.costbased.optimizer.enabled";
     public static final String SMALL_SCAN_THRESHOLD_ATTRIB = "phoenix.query.smallScanThreshold";
+    public static final String WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB =
+            "phoenix.query.wildcard.dynamicColumns";
     public static final String LOG_LEVEL = "phoenix.log.level";
     public static final String LOG_BUFFER_SIZE = "phoenix.log.buffer.size";
     public static final String LOG_BUFFER_WAIT_STRATEGY = "phoenix.log.wait.strategy";
     public static final String LOG_SAMPLE_RATE = "phoenix.log.sample.rate";
+
+	public static final String SYSTEM_CATALOG_SPLITTABLE = "phoenix.system.catalog.splittable";
+
+    // The parameters defined for handling task stored in table SYSTEM.TASK
+	// The time interval between periodic scans of table SYSTEM.TASK
+    public static final String TASK_HANDLING_INTERVAL_MS_ATTRIB = "phoenix.task.handling.interval.ms";
+    // The maximum time for a task to stay in table SYSTEM.TASK
+    public static final String TASK_HANDLING_MAX_INTERVAL_MS_ATTRIB = "phoenix.task.handling.maxInterval.ms";
+    // The initial delay before the first task from table SYSTEM.TASK is handled
+    public static final String TASK_HANDLING_INITIAL_DELAY_MS_ATTRIB = "phoenix.task.handling.initial.delay.ms";
+
+    // Before 4.15 when we created a view we included the parent table column metadata in the view
+    // metadata. After PHOENIX-3534 we allow SYSTEM.CATALOG to split and no longer store the parent
+    // table column metadata along with the child view metadata. When we resolve a child view, we
+    // resolve its ancestors and include their columns.
+    // Also, before 4.15 when we added a column to a base table we would have to propagate the
+    // column metadata to all its child views. After PHOENIX-3534 we no longer propagate metadata
+    // changes from a parent to its children (we just resolve its ancestors and include their columns)
+    // 
+    // The following config is used to continue writing the parent table column metadata while
+    // creating a view and also prevent metadata changes to a parent table/view that needs to be
+    // propagated to its children. This is done to allow rollback of the splittable SYSTEM.CATALOG
+    // feature
+    //
+    // By default this config is false meaning that rolling back the upgrade is not possible
+    // If this config is true and you want to rollback the upgrade be sure to run the sql commands in
+    // UpgradeUtil.addParentToChildLink which will recreate the PARENT->CHILD links in SYSTEM.CATALOG. This is needed
+    // as from 4.15 onwards the PARENT->CHILD links are stored in a separate SYSTEM.CHILD_LINK table.
+    public static final String ALLOW_SPLITTABLE_SYSTEM_CATALOG_ROLLBACK =
+            "phoenix.allow.system.catalog.rollback";
 
     /**
      * Get executor service used for parallel scans

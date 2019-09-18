@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat;
 import java.util.List;
 import java.util.TimeZone;
 
-import org.apache.commons.lang.time.FastDateFormat;
+import org.apache.commons.lang3.time.FastDateFormat;
 import org.apache.phoenix.schema.IllegalDataException;
 import org.apache.phoenix.schema.TypeMismatchException;
 import org.apache.phoenix.schema.types.PDataType;
@@ -97,7 +97,7 @@ public class DateUtil {
     
     public static TimeZone getTimeZone(String timeZoneId) {
         TimeZone parserTimeZone;
-        if (timeZoneId == null) {
+        if (timeZoneId == null || timeZoneId.equals(DateUtil.DEFAULT_TIME_ZONE_ID)) {
             parserTimeZone = DateUtil.DEFAULT_TIME_ZONE;
         } else if (LOCAL_TIME_ZONE_ID.equalsIgnoreCase(timeZoneId)) {
             parserTimeZone = TimeZone.getDefault();
@@ -164,21 +164,25 @@ public class DateUtil {
     }
 
     public static Format getDateFormatter(String pattern) {
-        return DateUtil.DEFAULT_DATE_FORMAT.equals(pattern)
+        return getDateFormatter(pattern, DateUtil.DEFAULT_TIME_ZONE_ID);
+    }
+
+    public static Format getDateFormatter(String pattern, String timeZoneID) {
+        return DateUtil.DEFAULT_DATE_FORMAT.equals(pattern) && DateUtil.DEFAULT_TIME_ZONE_ID.equals(timeZoneID)
                 ? DateUtil.DEFAULT_DATE_FORMATTER
-                : FastDateFormat.getInstance(pattern, DateUtil.DEFAULT_TIME_ZONE);
+                : FastDateFormat.getInstance(pattern, getTimeZone(timeZoneID));
     }
 
-    public static Format getTimeFormatter(String pattern) {
-        return DateUtil.DEFAULT_TIME_FORMAT.equals(pattern)
+    public static Format getTimeFormatter(String pattern, String timeZoneID) {
+        return DateUtil.DEFAULT_TIME_FORMAT.equals(pattern) && DateUtil.DEFAULT_TIME_ZONE_ID.equals(timeZoneID)
                 ? DateUtil.DEFAULT_TIME_FORMATTER
-                : FastDateFormat.getInstance(pattern, DateUtil.DEFAULT_TIME_ZONE);
+                : FastDateFormat.getInstance(pattern, getTimeZone(timeZoneID));
     }
 
-    public static Format getTimestampFormatter(String pattern) {
-        return DateUtil.DEFAULT_TIMESTAMP_FORMAT.equals(pattern)
+    public static Format getTimestampFormatter(String pattern, String timeZoneID) {
+        return DateUtil.DEFAULT_TIMESTAMP_FORMAT.equals(pattern) && DateUtil.DEFAULT_TIME_ZONE_ID.equals(timeZoneID)
                 ? DateUtil.DEFAULT_TIMESTAMP_FORMATTER
-                : FastDateFormat.getInstance(pattern, DateUtil.DEFAULT_TIME_ZONE);
+                : FastDateFormat.getInstance(pattern, getTimeZone(timeZoneID));
     }
 
     private static long parseDateTime(String dateTimeValue) {

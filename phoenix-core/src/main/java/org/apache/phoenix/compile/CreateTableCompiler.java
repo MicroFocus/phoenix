@@ -64,6 +64,7 @@ import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.types.PDataType;
 import org.apache.phoenix.schema.types.PVarbinary;
 import org.apache.phoenix.util.ByteUtil;
+import org.apache.phoenix.util.MetaDataUtil;
 import org.apache.phoenix.util.QueryUtil;
 
 import com.google.common.collect.Iterators;
@@ -157,6 +158,23 @@ public class CreateTableCompiler {
                     }
                 }
             }
+            if (viewTypeToBe == ViewType.MAPPED && parentToBe.getPKColumns().size() == 0) {
+                boolean isPKMissed = true;
+                if (pkConstraint.getColumnNames().size() > 0) {
+                    isPKMissed = false;
+                } else {
+                    for (ColumnDef columnDef: columnDefs) {
+                        if (columnDef.isPK()){
+                            isPKMissed = false;
+                            break;
+                        }
+                    }
+                }
+                if (isPKMissed) {
+                    throw new SQLExceptionInfo.Builder(SQLExceptionCode.PRIMARY_KEY_MISSING)
+                            .build().buildException();
+                }
+            }
         }
         final ViewType viewType = viewTypeToBe;
         final String viewStatement = viewStatementToBe;
@@ -189,7 +207,7 @@ public class CreateTableCompiler {
             @Override
             public MutationState execute() throws SQLException {
                 try {
-                    return client.createTable(finalCreate, splits, parent, viewStatement, viewType, viewColumnConstants, isViewColumnReferenced);
+                    return client.createTable(finalCreate, splits, parent, viewStatement, viewType, MetaDataUtil.getViewIndexIdDataType(), viewColumnConstants, isViewColumnReferenced);
                 } finally {
                     if (client.getConnection() != connection) {
                         client.getConnection().close();
@@ -204,7 +222,7 @@ public class CreateTableCompiler {
         };
     }
     
-    private static class ColumnTrackingExpressionCompiler extends ExpressionCompiler {
+    public static class ColumnTrackingExpressionCompiler extends ExpressionCompiler {
         private final BitSet isColumnReferenced;
         
         public ColumnTrackingExpressionCompiler(StatementContext context, BitSet isColumnReferenced) {

@@ -44,17 +44,27 @@ import org.apache.hadoop.hbase.client.*;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.RegionScanner;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.mapreduce.Job;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.mapreduce.index.IndexTool;
+import org.apache.phoenix.query.ConnectionQueryServices;
+import org.apache.phoenix.mapreduce.index.PhoenixIndexImportDirectMapper;
+import org.apache.phoenix.mapreduce.index.PhoenixIndexImportMapper;
+import org.apache.phoenix.mapreduce.index.PhoenixServerBuildIndexMapper;
+
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.phoenix.schema.PTable;
+import org.apache.phoenix.transaction.PhoenixTransactionProvider.Feature;
+import org.apache.phoenix.transaction.TransactionFactory;
+import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.PropertiesUtil;
 import org.apache.phoenix.util.QueryUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
 import org.apache.phoenix.util.SchemaUtil;
+import org.apache.phoenix.util.TestUtil;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
@@ -63,23 +73,22 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
 @RunWith(Parameterized.class)
-@Category(NeedsOwnMiniClusterTest.class)
-public class IndexToolIT extends ParallelStatsEnabledIT {
+public class IndexToolIT extends BaseUniqueNamesOwnClusterIT {
 
     private final boolean localIndex;
     private final boolean transactional;
     private final boolean directApi;
     private final String tableDDLOptions;
-    private final boolean mutable;
     private final boolean useSnapshot;
+    private final boolean useTenantId;
 
-    public IndexToolIT(boolean transactional, boolean mutable, boolean localIndex,
-            boolean directApi, boolean useSnapshot) {
+    public IndexToolIT(String transactionProvider, boolean mutable, boolean localIndex,
+            boolean directApi, boolean useSnapshot, boolean useTenantId) {
         this.localIndex = localIndex;
-        this.transactional = transactional;
+        this.transactional = transactionProvider != null;
         this.directApi = directApi;
-        this.mutable = mutable;
         this.useSnapshot = useSnapshot;
+        this.useTenantId = useTenantId;
         StringBuilder optionBuilder = new StringBuilder();
         if (!mutable) {
             optionBuilder.append(" IMMUTABLE_ROWS=true ");
@@ -88,7 +97,7 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
             if (!(optionBuilder.length() == 0)) {
                 optionBuilder.append(",");
             }
-            optionBuilder.append(" TRANSACTIONAL=true ");
+            optionBuilder.append(" TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + transactionProvider + "'");
         }
         optionBuilder.append(" SPLIT ON(1,2)");
         this.tableDDLOptions = optionBuilder.toString();
@@ -97,9 +106,13 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
     @BeforeClass
     public static void setup() throws Exception {
         Map<String, String> serverProps = Maps.newHashMapWithExpectedSize(2);
+        serverProps.put(QueryServices.STATS_GUIDEPOST_WIDTH_BYTES_ATTRIB, Long.toString(20));
+        serverProps.put(QueryServices.MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS_ATTRIB, Long.toString(5));
         serverProps.put(QueryServices.EXTRA_JDBC_ARGUMENTS_ATTRIB,
             QueryServicesOptions.DEFAULT_EXTRA_JDBC_ARGUMENTS);
         Map<String, String> clientProps = Maps.newHashMapWithExpectedSize(2);
+        clientProps.put(QueryServices.USE_STATS_FOR_PARALLELIZATION, Boolean.toString(true));
+        clientProps.put(QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB, Long.toString(5));
         clientProps.put(QueryServices.TRANSACTIONS_ENABLED, Boolean.TRUE.toString());
         clientProps.put(QueryServices.FORCE_ROW_KEY_ORDER_ATTRIB, Boolean.TRUE.toString());
         setUpTestDriver(new ReadOnlyProps(serverProps.entrySet().iterator()),
@@ -107,22 +120,31 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
     }
 
     @Parameters(
-            name = "transactional = {0} , mutable = {1} , localIndex = {2}, directApi = {3}, useSnapshot = {4}")
-    public static Collection<Boolean[]> data() {
-        List<Boolean[]> list = Lists.newArrayListWithExpectedSize(16);
+            name = "transactionProvider={0},mutable={1},localIndex={2},directApi={3},useSnapshot={4}")
+    public static Collection<Object[]> data() {
+        List<Object[]> list = Lists.newArrayListWithExpectedSize(48);
         boolean[] Booleans = new boolean[] { false, true };
-        for (boolean transactional : Booleans) {
+        for (String transactionProvider : new String[] {"TEPHRA", "OMID", null}) {
             for (boolean mutable : Booleans) {
                 for (boolean localIndex : Booleans) {
-                    for (boolean directApi : Booleans) {
-                        for (boolean useSnapshot : Booleans) {
-                            list.add(new Boolean[] { transactional, mutable, localIndex, directApi, useSnapshot });
+                    if (!localIndex 
+                            || transactionProvider == null 
+                            || !TransactionFactory.getTransactionProvider(
+                                    TransactionFactory.Provider.valueOf(transactionProvider))
+                                .isUnsupported(Feature.ALLOW_LOCAL_INDEX)) {
+                        for (boolean directApi : Booleans) {
+                            for (boolean useSnapshot : Booleans) {
+                                list.add(new Object[] { transactionProvider, mutable, localIndex,
+                                        directApi, useSnapshot, false});
+                            }
                         }
                     }
                 }
             }
         }
-        return list;
+        // Add the usetenantId
+        list.add(new Object[] { "", false, false, true, false, true});
+        return TestUtil.filterTxParamData(list,0);
     }
 
     @Test
@@ -216,6 +238,91 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
             assertFalse(rs.next());
         } finally {
             conn.close();
+        }
+    }
+
+    @Test
+    public void testIndexToolWithTenantId() throws Exception {
+        if (!useTenantId) { return;}
+        String tenantId = generateUniqueName();
+        String schemaName = generateUniqueName();
+        String dataTableName = generateUniqueName();
+        String viewTenantName = generateUniqueName();
+        String indexNameGlobal = generateUniqueName();
+        String indexNameTenant = generateUniqueName();
+        String viewIndexTableName = "_IDX_" + dataTableName;
+
+        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
+        Connection connGlobal = DriverManager.getConnection(getUrl(), props);
+        props.setProperty(PhoenixRuntime.TENANT_ID_ATTRIB, tenantId);
+        Connection connTenant = DriverManager.getConnection(getUrl(), props);
+        String createTblStr = "CREATE TABLE %s (TENANT_ID VARCHAR(15) NOT NULL,ID INTEGER NOT NULL"
+                + ", NAME VARCHAR, CONSTRAINT PK_1 PRIMARY KEY (TENANT_ID, ID)) MULTI_TENANT=true";
+        String createViewStr = "CREATE VIEW %s AS SELECT * FROM %s";
+
+        String upsertQueryStr = "UPSERT INTO %s (TENANT_ID, ID, NAME) VALUES('%s' , %d, '%s')";
+        String createIndexStr = "CREATE INDEX %s ON %s (NAME) ";
+
+        try {
+            String tableStmtGlobal = String.format(createTblStr, dataTableName);
+            connGlobal.createStatement().execute(tableStmtGlobal);
+
+            String viewStmtTenant = String.format(createViewStr, viewTenantName, dataTableName);
+            connTenant.createStatement().execute(viewStmtTenant);
+
+            String idxStmtTenant = String.format(createIndexStr, indexNameTenant, viewTenantName);
+            connTenant.createStatement().execute(idxStmtTenant);
+
+            connTenant.createStatement()
+                    .execute(String.format(upsertQueryStr, viewTenantName, tenantId, 1, "x"));
+            connTenant.commit();
+
+            runIndexTool(true, false, "", viewTenantName, indexNameTenant,
+                    tenantId, 0, new String[0]);
+
+            String selectSql = String.format("SELECT ID FROM %s WHERE NAME='x'", viewTenantName);
+            ResultSet rs = connTenant.createStatement().executeQuery("EXPLAIN " + selectSql);
+            String actualExplainPlan = QueryUtil.getExplainPlan(rs);
+            assertExplainPlan(false, actualExplainPlan, "", viewIndexTableName);
+            rs = connTenant.createStatement().executeQuery(selectSql);
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1));
+            assertFalse(rs.next());
+
+            // Remove from tenant view index and build.
+            ConnectionQueryServices queryServices = connGlobal.unwrap(PhoenixConnection.class).getQueryServices();
+            Admin admin = queryServices.getAdmin();
+            TableName tableName = TableName.valueOf(viewIndexTableName);
+            admin.disableTable(tableName);
+            admin.truncateTable(tableName, false);
+
+            runIndexTool(true, false, "", viewTenantName, indexNameTenant,
+                    tenantId, 0, new String[0]);
+
+            Table htable= queryServices.getTable(Bytes.toBytes(viewIndexTableName));
+            int count = getUtility().countRows(htable);
+            // Confirm index has rows
+            assertTrue(count == 1);
+
+            selectSql = String.format("SELECT /*+ INDEX(%s) */ COUNT(*) FROM %s",
+                    indexNameTenant, viewTenantName);
+            rs = connTenant.createStatement().executeQuery(selectSql);
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt(1));
+            assertFalse(rs.next());
+
+            String idxStmtGlobal =
+                    String.format(createIndexStr, indexNameGlobal, dataTableName);
+            connGlobal.createStatement().execute(idxStmtGlobal);
+
+            // run the index MR job this time with tenant id.
+            // We expect it to return -1 because indexTable is not correct for this tenant.
+            runIndexTool(true, false, schemaName, dataTableName, indexNameGlobal,
+                    tenantId, -1, new String[0]);
+
+        } finally {
+            connGlobal.close();
+            connTenant.close();
         }
     }
 
@@ -323,7 +430,7 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
             conn.createStatement().execute(indexDDL);
 
             // run with 50% sampling rate, split if data table more than 3 regions
-            runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName, "-sp", "50", "-spa", "3");
+            runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName,"-sp", "50", "-spa", "3");
 
             assertEquals(targetNumRegions, admin.getTableRegions(indexTN).size());
             List<Cell> values = new ArrayList<>();
@@ -352,7 +459,7 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
     }
 
     public static String[] getArgValues(boolean directApi, boolean useSnapshot, String schemaName,
-            String dataTable, String indxTable) {
+            String dataTable, String indxTable, String tenantId) {
         final List<String> args = Lists.newArrayList();
         if (schemaName != null) {
             args.add("-s");
@@ -370,6 +477,11 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
 
         if (useSnapshot) {
             args.add("-snap");
+        }
+
+        if (tenantId != null) {
+            args.add("-tenant");
+            args.add(tenantId);
         }
 
         args.add("-op");
@@ -390,17 +502,53 @@ public class IndexToolIT extends ParallelStatsEnabledIT {
         runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName, new String[0]);
     }
 
+    private static void verifyMapper(Job job, boolean directApi, boolean useSnapshot, String schemaName,
+                                  String dataTableName, String indexTableName, String tenantId) throws Exception {
+        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
+        if (tenantId != null) {
+            props.setProperty(PhoenixRuntime.TENANT_ID_ATTRIB, tenantId);
+        }
+        try (Connection conn =
+                     DriverManager.getConnection(getUrl(), props)) {
+            PTable dataTable = PhoenixRuntime.getTable(conn, SchemaUtil.getTableName(schemaName, dataTableName));
+            PTable indexTable = PhoenixRuntime.getTable(conn, SchemaUtil.getTableName(schemaName, indexTableName));
+            boolean transactional = dataTable.isTransactional();
+            boolean localIndex = PTable.IndexType.LOCAL.equals(indexTable.getIndexType());
+
+            if (directApi) {
+                if ((localIndex || !transactional) && !useSnapshot) {
+                    assertEquals(job.getMapperClass(), PhoenixServerBuildIndexMapper.class);
+                } else {
+                    assertEquals(job.getMapperClass(), PhoenixIndexImportDirectMapper.class);
+                }
+            }
+            else {
+                assertEquals(job.getMapperClass(), PhoenixIndexImportMapper.class);
+            }
+        }
+    }
+
     public static void runIndexTool(boolean directApi, boolean useSnapshot, String schemaName,
             String dataTableName, String indexTableName, String... additionalArgs) throws Exception {
+        runIndexTool(directApi, useSnapshot, schemaName, dataTableName, indexTableName, null, 0, additionalArgs);
+    }
+
+    public static void runIndexTool(boolean directApi, boolean useSnapshot, String schemaName,
+            String dataTableName, String indexTableName, String tenantId, int expectedStatus,
+            String... additionalArgs) throws Exception {
         IndexTool indexingTool = new IndexTool();
         Configuration conf = new Configuration(getUtility().getConfiguration());
         conf.set(QueryServices.TRANSACTIONS_ENABLED, Boolean.TRUE.toString());
         indexingTool.setConf(conf);
         final String[] cmdArgs =
-                getArgValues(directApi, useSnapshot, schemaName, dataTableName, indexTableName);
+                getArgValues(directApi, useSnapshot, schemaName, dataTableName, indexTableName, tenantId);
         List<String> cmdArgList = new ArrayList<>(Arrays.asList(cmdArgs));
         cmdArgList.addAll(Arrays.asList(additionalArgs));
         int status = indexingTool.run(cmdArgList.toArray(new String[cmdArgList.size()]));
-        assertEquals(0, status);
+
+        if (expectedStatus == 0) {
+            verifyMapper(indexingTool.getJob(), directApi, useSnapshot, schemaName, dataTableName, indexTableName, tenantId);
+        }
+        assertEquals(expectedStatus, status);
     }
 }

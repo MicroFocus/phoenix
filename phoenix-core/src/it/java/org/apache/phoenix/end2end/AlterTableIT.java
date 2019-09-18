@@ -62,9 +62,11 @@ import org.apache.phoenix.schema.PTable.EncodedCQCounter;
 import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
 import org.apache.phoenix.schema.PTableKey;
 import org.apache.phoenix.schema.TableNotFoundException;
+import org.apache.phoenix.transaction.TransactionFactory;
 import org.apache.phoenix.util.IndexUtil;
 import org.apache.phoenix.util.PropertiesUtil;
 import org.apache.phoenix.util.SchemaUtil;
+import org.apache.phoenix.util.TestUtil;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -328,17 +330,15 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
 
     }
 
-
     @Test
     public void testAddVarCols() throws Exception {
         Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
-        Connection conn = DriverManager.getConnection(getUrl(), props);
-        conn.setAutoCommit(false);
+        try (Connection conn = DriverManager.getConnection(getUrl(), props)) {
+            conn.setAutoCommit(false);
 
-        try {
             String ddl = "CREATE TABLE " + dataTableFullName +
-                    "  (a_string varchar not null, col1 integer" +
-                    "  CONSTRAINT pk PRIMARY KEY (a_string)) " + tableDDLOptions;
+              "  (a_string varchar not null, col1 integer" +
+              "  CONSTRAINT pk PRIMARY KEY (a_string)) " + tableDDLOptions;
             conn.createStatement().execute(ddl);
 
             String dml = "UPSERT INTO " + dataTableFullName + " VALUES(?)";
@@ -357,16 +357,18 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             assertEquals("b",rs.getString(1));
             assertFalse(rs.next());
 
-
             query = "SELECT * FROM " + dataTableFullName + " WHERE a_string = 'a' ";
             rs = conn.createStatement().executeQuery(query);
             assertTrue(rs.next());
             assertEquals("a",rs.getString(1));
 
-            ddl = "ALTER TABLE " + dataTableFullName + " ADD  c1.col2 VARCHAR  , c1.col3 integer , c2.col4 integer";
+            ddl = "ALTER TABLE " + dataTableFullName + " ADD c1.col2 VARCHAR, c1.col3 integer, "
+              + "c2.col4 integer";
             conn.createStatement().execute(ddl);
 
-            ddl = "ALTER TABLE " + dataTableFullName + " ADD   col5 integer , c1.col2 VARCHAR";
+            // If we are adding two columns but one of them already exists, the other one should
+            // not be added
+            ddl = "ALTER TABLE " + dataTableFullName + " ADD col5 integer, c1.col2 VARCHAR";
             try {
                 conn.createStatement().execute(ddl);
                 fail();
@@ -382,10 +384,7 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
                 assertTrue(e.getMessage(), e.getMessage().contains("ERROR 504 (42703): Undefined column."));
             }
 
-            ddl = "ALTER TABLE " + dataTableFullName + " ADD IF NOT EXISTS col5 integer , c1.col2 VARCHAR";
-            conn.createStatement().execute(ddl);
-
-            dml = "UPSERT INTO " + dataTableFullName + " VALUES(?,?,?,?,?)";
+            dml = "UPSERT INTO " + dataTableFullName + " VALUES(?, ?, ?, ?, ?)";
             stmt = conn.prepareStatement(dml);
             stmt.setString(1, "c");
             stmt.setInt(2, 100);
@@ -405,9 +404,6 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             assertEquals(102,rs.getInt(5));
             assertFalse(rs.next());
 
-            ddl = "ALTER TABLE " + dataTableFullName + " ADD  col5 integer";
-            conn.createStatement().execute(ddl);
-
             query = "SELECT c1.* FROM " + dataTableFullName + " WHERE a_string = 'c' ";
             rs = conn.createStatement().executeQuery(query);
             assertTrue(rs.next());
@@ -415,8 +411,16 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             assertEquals(101,rs.getInt(2));
             assertFalse(rs.next());
 
+            // If we are adding two columns with "IF NOT EXISTS" and one of them already exists,
+            // the other one should be added
+            ddl = "ALTER TABLE " + dataTableFullName + " ADD IF NOT EXISTS col5 integer, "
+              + "c1.col2 VARCHAR";
+            conn.createStatement().execute(ddl);
 
-            dml = "UPSERT INTO " + dataTableFullName + "(a_string,col1,col5) VALUES(?,?,?)";
+            query = "SELECT col5 FROM " + dataTableFullName;
+            conn.createStatement().executeQuery(query);
+
+            dml = "UPSERT INTO " + dataTableFullName + "(a_string, col1, col5) VALUES(?, ?, ?)";
             stmt = conn.prepareStatement(dml);
             stmt.setString(1, "e");
             stmt.setInt(2, 200);
@@ -424,17 +428,14 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             stmt.execute();
             conn.commit();
 
-
-            query = "SELECT a_string,col1,col5 FROM " + dataTableFullName + " WHERE a_string = 'e' ";
+            query = "SELECT a_string, col1, col5 FROM " + dataTableFullName
+              + " WHERE a_string = 'e' ";
             rs = conn.createStatement().executeQuery(query);
             assertTrue(rs.next());
             assertEquals("e",rs.getString(1));
             assertEquals(200,rs.getInt(2));
             assertEquals(201,rs.getInt(3));
             assertFalse(rs.next());
-
-          } finally {
-            conn.close();
         }
     }
 
@@ -811,7 +812,7 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
         conn1.createStatement().execute("CREATE INDEX " + indexTableName + " ON " + dataTableFullName + "(COL1) INCLUDE (COL2,COL3,COL4)");
         
         ddl = "ALTER TABLE " + dataTableFullName + " DROP COLUMN COL2, COL3";
-        conn1.createStatement().execute(ddl);
+         conn1.createStatement().execute(ddl);
         ResultSet rs = conn1.getMetaData().getColumns("", "", dataTableFullName, null);
         assertTrue(rs.next());
         assertEquals("ID",rs.getString(4));
@@ -924,7 +925,7 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             // set HColumnProperty property when adding a pk column and other key value columns should work
             ddl = "ALTER TABLE "
                     + dataTableFullName
-                    + " ADD k3 DECIMAL PRIMARY KEY, col2 bigint, CF.col3 bigint IN_MEMORY = true, CF.IN_MEMORY=false, CF.REPLICATION_SCOPE = 1";
+                    + " ADD k3 DECIMAL PRIMARY KEY, col2 bigint, CF.col3 bigint IN_MEMORY = true, CF.IN_MEMORY=false, REPLICATION_SCOPE = 1";
             conn.createStatement().execute(ddl);
             // assert that k3 was added as new pk
             ResultSet rs = conn.getMetaData().getPrimaryKeys("", schemaName, dataTableName);
@@ -945,7 +946,7 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
                 assertEquals(2, columnFamilies.length);
                 assertEquals("0", columnFamilies[0].getNameAsString());
                 assertEquals(true, columnFamilies[0].isInMemory());
-                assertEquals(0, columnFamilies[0].getScope());
+                assertEquals(1, columnFamilies[0].getScope());
                 assertEquals("CF", columnFamilies[1].getNameAsString());
                 assertEquals(false, columnFamilies[1].isInMemory());
                 assertEquals(1, columnFamilies[1].getScope());
@@ -1073,6 +1074,9 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
     
 	@Test
 	public void testCreatingTxnTableFailsIfTxnsDisabled() throws Exception {
+	    if (!TransactionFactory.Provider.getDefault().runTests()) {
+	        return;
+	    }
         Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
         props.setProperty(QueryServices.TRANSACTIONS_ENABLED, Boolean.toString(false));
 		try (Connection conn = DriverManager.getConnection(getUrl(), props)) {
@@ -1286,10 +1290,11 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
             
             // assert that the server side metadata for the base table and the view is also updated correctly.
             assertEncodedCQCounter(DEFAULT_COLUMN_FAMILY, schemaName, baseTableName, (ENCODED_CQ_COUNTER_INITIAL_VALUE + 10));
-            assertEncodedCQValue(DEFAULT_COLUMN_FAMILY, "COL10", schemaName, viewName, (ENCODED_CQ_COUNTER_INITIAL_VALUE + 8));
-            assertEncodedCQValue("A", "COL11", schemaName, viewName, ENCODED_CQ_COUNTER_INITIAL_VALUE + 9);
+            assertEncodedCQValue(DEFAULT_COLUMN_FAMILY, "COL10", schemaName, baseTableName, (ENCODED_CQ_COUNTER_INITIAL_VALUE + 8));
+            assertEncodedCQValue("A", "COL11", schemaName, baseTableName, ENCODED_CQ_COUNTER_INITIAL_VALUE + 9);
             assertSequenceNumber(schemaName, baseTableName, columnEncoded ? initBaseTableSeqNumber + 4 : initBaseTableSeqNumber + 2 );
-            assertSequenceNumber(schemaName, viewName, PTable.INITIAL_SEQ_NUM + 2);
+            // view sequence number does not change as base table column changes are not propagated to views
+            assertSequenceNumber(schemaName, viewName, PTable.INITIAL_SEQ_NUM + 1);
         }
     }
 	
@@ -1347,5 +1352,40 @@ public class AlterTableIT extends ParallelStatsDisabledIT {
         }
     }
     
+	@Test
+	public void testAlterTableWithIndexesExtendPk() throws Exception {
+		Properties props = PropertiesUtil.deepCopy(TestUtil.TEST_PROPERTIES);
+		Connection conn = DriverManager.getConnection(getUrl(), props);
+		conn.setAutoCommit(false);
+		String tableName = generateUniqueName();
+		String indexName1 = "I_" + generateUniqueName();
+		String indexName2 = "I_" + generateUniqueName();
+
+		try {
+			String ddl = "CREATE TABLE " + tableName + " (ORG_ID CHAR(15) NOT NULL,"
+					+ " PARTITION_KEY CHAR(3) NOT NULL, " + " ACTIVITY_DATE DATE NOT NULL, "
+					+ " FK1_ID CHAR(15) NOT NULL, " + " FK2_ID CHAR(15) NOT NULL, " + " TYPE VARCHAR NOT NULL, "
+					+ " IS_OPEN BOOLEAN " + " CONSTRAINT PKVIEW PRIMARY KEY " + "("
+					+ "ORG_ID, PARTITION_KEY, ACTIVITY_DATE, FK1_ID, FK2_ID, TYPE" + "))";
+			createTestTable(getUrl(), ddl);
+
+			String idx1ddl = "CREATE INDEX " + indexName1 + " ON " + tableName
+					+ " (FK1_ID, ACTIVITY_DATE DESC) INCLUDE (IS_OPEN)";
+			PreparedStatement stmt1 = conn.prepareStatement(idx1ddl);
+			stmt1.execute();
+
+			String idx2ddl = "CREATE INDEX " + indexName2 + " ON " + tableName
+					+ " (FK2_ID, ACTIVITY_DATE DESC) INCLUDE (IS_OPEN)";
+			PreparedStatement stmt2 = conn.prepareStatement(idx2ddl);
+			stmt2.execute();
+
+			ddl = "ALTER TABLE " + tableName + " ADD SOURCE VARCHAR(25) NULL PRIMARY KEY";
+			PreparedStatement stmt3 = conn.prepareStatement(ddl);
+			stmt3.execute();
+		} finally {
+			conn.close();
+		}
+	}
+
 }
  

@@ -23,6 +23,8 @@ import static org.apache.phoenix.query.QueryServices.ALLOW_VIEWS_ADD_NEW_CF_BASE
 import static org.apache.phoenix.query.QueryServices.AUTO_UPGRADE_ENABLED;
 import static org.apache.phoenix.query.QueryServices.CALL_QUEUE_PRODUCER_ATTRIB_NAME;
 import static org.apache.phoenix.query.QueryServices.CALL_QUEUE_ROUND_ROBIN_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.CLIENT_METRICS_TAG;
+import static org.apache.phoenix.query.QueryServices.CLIENT_SPOOL_THRESHOLD_BYTES_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.COLLECT_REQUEST_LEVEL_METRICS;
 import static org.apache.phoenix.query.QueryServices.COMMIT_STATS_ASYNC;
 import static org.apache.phoenix.query.QueryServices.COST_BASED_OPTIMIZER_ENABLED;
@@ -78,13 +80,14 @@ import static org.apache.phoenix.query.QueryServices.RUN_RENEW_LEASE_FREQUENCY_I
 import static org.apache.phoenix.query.QueryServices.RUN_UPDATE_STATS_ASYNC;
 import static org.apache.phoenix.query.QueryServices.SCAN_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SCAN_RESULT_CHUNK_SIZE;
+import static org.apache.phoenix.query.QueryServices.SERVER_SPOOL_THRESHOLD_BYTES_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SEQUENCE_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SEQUENCE_SALT_BUCKETS_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SPOOL_DIRECTORY;
-import static org.apache.phoenix.query.QueryServices.SPOOL_THRESHOLD_BYTES_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.STATS_COLLECTION_ENABLED;
 import static org.apache.phoenix.query.QueryServices.STATS_GUIDEPOST_WIDTH_BYTES_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.STATS_CACHE_THREAD_POOL_SIZE;
 import static org.apache.phoenix.query.QueryServices.STATS_USE_CURRENT_TIME_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.THREAD_POOL_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.THREAD_TIMEOUT_MS_ATTRIB;
@@ -117,7 +120,7 @@ import org.apache.phoenix.trace.util.Tracing;
 import org.apache.phoenix.transaction.TransactionFactory;
 import org.apache.phoenix.util.DateUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
-
+import org.apache.tephra.TxConstants;
 
 
 /**
@@ -132,6 +135,11 @@ public class QueryServicesOptions {
 	public static final int DEFAULT_QUEUE_SIZE = 5000;
 	public static final int DEFAULT_THREAD_TIMEOUT_MS = 600000; // 10min
 	public static final int DEFAULT_SPOOL_THRESHOLD_BYTES = 1024 * 1024 * 20; // 20m
+	public static final int DEFAULT_SERVER_SPOOL_THRESHOLD_BYTES = 1024 * 1024 * 20; // 20m
+	public static final int DEFAULT_CLIENT_SPOOL_THRESHOLD_BYTES = 1024 * 1024 * 20; // 20m
+	public static final boolean DEFAULT_CLIENT_ORDERBY_SPOOLING_ENABLED = true;
+	public static final boolean DEFAULT_CLIENT_JOIN_SPOOLING_ENABLED = true;
+	public static final boolean DEFAULT_SERVER_ORDERBY_SPOOLING_ENABLED = true;
     public static final String DEFAULT_SPOOL_DIRECTORY = System.getProperty("java.io.tmpdir");
 	public static final int DEFAULT_MAX_MEMORY_PERC = 15; // 15% of heap
 	public static final int DEFAULT_MAX_TENANT_MEMORY_PERC = 100;
@@ -158,6 +166,7 @@ public class QueryServicesOptions {
     public final static long DEFAULT_MUTATE_BATCH_SIZE_BYTES = 2097152;
 	// The only downside of it being out-of-sync is that the parallelization of the scan won't be as balanced as it could be.
     public static final int DEFAULT_MAX_SERVER_CACHE_TIME_TO_LIVE_MS = 30000; // 30 sec (with no activity)
+    public static final int DEFAULT_MAX_SERVER_CACHE_PERSISTENCE_TIME_TO_LIVE_MS = 30 * 60000; // 30 minutes
     public static final int DEFAULT_SCAN_CACHE_SIZE = 1000;
     public static final int DEFAULT_MAX_INTRA_REGION_PARALLELIZATION = DEFAULT_MAX_QUERY_CONCURRENCY;
     public static final int DEFAULT_DISTINCT_VALUE_COMPRESS_THRESHOLD = 1024 * 1024 * 1; // 1 Mb
@@ -244,6 +253,7 @@ public class QueryServicesOptions {
     public static final long DEFAULT_STATS_MAX_CACHE_SIZE = 256 * 1024 * 1024;
     // Allow stats collection to be initiated by client multiple times immediately
     public static final int DEFAULT_MIN_STATS_UPDATE_FREQ_MS = 0;
+    public static final int DEFAULT_STATS_CACHE_THREAD_POOL_SIZE = 4;
 
     public static final boolean DEFAULT_USE_REVERSE_SCAN = true;
 
@@ -269,6 +279,7 @@ public class QueryServicesOptions {
     public static final String DEFAULT_TRANSACTION_PROVIDER = TransactionFactory.Provider.getDefault().name();
     public static final boolean DEFAULT_TRANSACTIONS_ENABLED = false;
     public static final boolean DEFAULT_IS_GLOBAL_METRICS_ENABLED = true;
+    public static final String DEFAULT_CLIENT_METRICS_TAG = "FAT_CLIENT";
 
     public static final boolean DEFAULT_TRANSACTIONAL = false;
     public static final boolean DEFAULT_AUTO_FLUSH = false;
@@ -298,8 +309,10 @@ public class QueryServicesOptions {
     public static final int DEFAULT_QUERY_SERVER_UGI_CACHE_CONCURRENCY = 10;
     public static final boolean DEFAULT_QUERY_SERVER_SPNEGO_AUTH_DISABLED = false;
     public static final boolean DEFAULT_QUERY_SERVER_WITH_REMOTEUSEREXTRACTOR = false;
+    public static final boolean DEFAULT_QUERY_SERVER_CUSTOM_AUTH_ENABLED = false;
     public static final String DEFAULT_QUERY_SERVER_REMOTEUSEREXTRACTOR_PARAM = "doAs";
     public static final boolean DEFAULT_QUERY_SERVER_DISABLE_KERBEROS_LOGIN = false;
+    public static final boolean DEFAULT_QUERY_SERVER_CUSTOMIZERS_ENABLED = false;
 
     public static final boolean DEFAULT_RENEW_LEASE_ENABLED = true;
     public static final int DEFAULT_RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS =
@@ -336,6 +349,15 @@ public class QueryServicesOptions {
     public static final int DEFAULT_UPDATE_CACHE_FREQUENCY = 0;
     public static final int DEFAULT_SMALL_SCAN_THRESHOLD = 100;
 
+    // default system task handling interval in milliseconds
+    public static final long DEFAULT_TASK_HANDLING_INTERVAL_MS = 60*1000; // 1 min
+    public static final long DEFAULT_TASK_HANDLING_MAX_INTERVAL_MS = 30*60*1000; // 30 min
+    public static final long DEFAULT_TASK_HANDLING_INITIAL_DELAY_MS = 10*1000; // 10 sec
+
+    public static final boolean DEFAULT_ALLOW_SPLITTABLE_SYSTEM_CATALOG_ROLLBACK = false;
+
+    public static final boolean DEFAULT_PROPERTY_POLICY_PROVIDER_ENABLED = true;
+
     @SuppressWarnings("serial")
     public static final Set<String> DEFAULT_QUERY_SERVER_SKIP_WORDS = new HashSet<String>() {
       {
@@ -353,10 +375,17 @@ public class QueryServicesOptions {
     // RS -> RS calls for upsert select statements are disabled by default
     public static final boolean DEFAULT_ENABLE_SERVER_UPSERT_SELECT = false;
 
+    // By default generally allow server trigger mutations
+    public static final boolean DEFAULT_ENABLE_SERVER_SIDE_DELETE_MUTATIONS = true;
+    public static final boolean DEFAULT_ENABLE_SERVER_SIDE_UPSERT_MUTATIONS = true;
+
     public static final boolean DEFAULT_COST_BASED_OPTIMIZER_ENABLED = false;
+    public static final boolean DEFAULT_WILDCARD_QUERY_DYNAMIC_COLS_ATTRIB = false;
     public static final String DEFAULT_LOGGING_LEVEL = LogLevel.OFF.name();
     public static final String DEFAULT_LOG_SAMPLE_RATE = "1.0";
     public static final int DEFAULT_LOG_SALT_BUCKETS = 32;
+
+	public static final boolean DEFAULT_SYSTEM_CATALOG_SPLITTABLE = true;
 
     private final Configuration config;
 
@@ -385,7 +414,8 @@ public class QueryServicesOptions {
             .setIfUnset(THREAD_POOL_SIZE_ATTRIB, DEFAULT_THREAD_POOL_SIZE)
             .setIfUnset(QUEUE_SIZE_ATTRIB, DEFAULT_QUEUE_SIZE)
             .setIfUnset(THREAD_TIMEOUT_MS_ATTRIB, DEFAULT_THREAD_TIMEOUT_MS)
-            .setIfUnset(SPOOL_THRESHOLD_BYTES_ATTRIB, DEFAULT_SPOOL_THRESHOLD_BYTES)
+            .setIfUnset(CLIENT_SPOOL_THRESHOLD_BYTES_ATTRIB, DEFAULT_CLIENT_SPOOL_THRESHOLD_BYTES)
+            .setIfUnset(SERVER_SPOOL_THRESHOLD_BYTES_ATTRIB, DEFAULT_SERVER_SPOOL_THRESHOLD_BYTES)
             .setIfUnset(SPOOL_DIRECTORY, DEFAULT_SPOOL_DIRECTORY)
             .setIfUnset(MAX_MEMORY_PERC_ATTRIB, DEFAULT_MAX_MEMORY_PERC)
             .setIfUnset(MAX_TENANT_MEMORY_PERC_ATTRIB, DEFAULT_MAX_TENANT_MEMORY_PERC)
@@ -395,6 +425,7 @@ public class QueryServicesOptions {
             .setIfUnset(DATE_FORMAT_TIMEZONE_ATTRIB, DEFAULT_DATE_FORMAT_TIMEZONE)
             .setIfUnset(STATS_UPDATE_FREQ_MS_ATTRIB, DEFAULT_STATS_UPDATE_FREQ_MS)
             .setIfUnset(MIN_STATS_UPDATE_FREQ_MS_ATTRIB, DEFAULT_MIN_STATS_UPDATE_FREQ_MS)
+            .setIfUnset(STATS_CACHE_THREAD_POOL_SIZE, DEFAULT_STATS_CACHE_THREAD_POOL_SIZE)
             .setIfUnset(CALL_QUEUE_ROUND_ROBIN_ATTRIB, DEFAULT_CALL_QUEUE_ROUND_ROBIN)
             .setIfUnset(MAX_MUTATION_SIZE_ATTRIB, DEFAULT_MAX_MUTATION_SIZE)
             .setIfUnset(ROW_KEY_ORDER_SALTED_TABLE_ATTRIB, DEFAULT_FORCE_ROW_KEY_ORDER)
@@ -441,7 +472,10 @@ public class QueryServicesOptions {
             .setIfUnset(COST_BASED_OPTIMIZER_ENABLED, DEFAULT_COST_BASED_OPTIMIZER_ENABLED)
             .setIfUnset(PHOENIX_ACLS_ENABLED,  DEFAULT_PHOENIX_ACLS_ENABLED)
             .setIfUnset(LOG_LEVEL,  DEFAULT_LOGGING_LEVEL)
-            .setIfUnset(LOG_SAMPLE_RATE,  DEFAULT_LOG_SAMPLE_RATE);
+            .setIfUnset(LOG_SAMPLE_RATE,  DEFAULT_LOG_SAMPLE_RATE)
+            .setIfUnset(TxConstants.TX_PRE_014_CHANGESET_KEY, Boolean.FALSE.toString())
+            .setIfUnset(CLIENT_METRICS_TAG, DEFAULT_CLIENT_METRICS_TAG)
+            ;
         // HBase sets this to 1, so we reset it to something more appropriate.
         // Hopefully HBase will change this, because we can't know if a user set
         // it to 1, so we'll change it.
@@ -495,8 +529,12 @@ public class QueryServicesOptions {
         return set(THREAD_TIMEOUT_MS_ATTRIB, threadTimeoutMs);
     }
 
-    public QueryServicesOptions setSpoolThresholdBytes(int spoolThresholdBytes) {
-        return set(SPOOL_THRESHOLD_BYTES_ATTRIB, spoolThresholdBytes);
+    public QueryServicesOptions setClientSpoolThresholdBytes(long spoolThresholdBytes) {
+        return set(CLIENT_SPOOL_THRESHOLD_BYTES_ATTRIB, spoolThresholdBytes);
+    }
+
+    public QueryServicesOptions setServerSpoolThresholdBytes(long spoolThresholdBytes) {
+        return set(SERVER_SPOOL_THRESHOLD_BYTES_ATTRIB, spoolThresholdBytes);
     }
 
     public QueryServicesOptions setSpoolDirectory(String spoolDirectory) {
@@ -605,6 +643,10 @@ public class QueryServicesOptions {
         return config.getInt(MUTATE_BATCH_SIZE_ATTRIB, DEFAULT_MUTATE_BATCH_SIZE);
     }
 
+    public String getClientMetricTag() {
+        return config.get(QueryServices.CLIENT_METRICS_TAG, DEFAULT_CLIENT_METRICS_TAG);
+    }
+
     public boolean isUseIndexes() {
         return config.getBoolean(USE_INDEXES_ATTRIB, DEFAULT_USE_INDEXES);
     }
@@ -709,6 +751,10 @@ public class QueryServicesOptions {
 
     public QueryServicesOptions setMinStatsUpdateFrequencyMs(int frequencyMs) {
         return set(MIN_STATS_UPDATE_FREQ_MS_ATTRIB, frequencyMs);
+    }
+
+    public QueryServicesOptions setStatsCacheThreadPoolSize(int threadPoolSize) {
+        return set(STATS_CACHE_THREAD_POOL_SIZE, threadPoolSize);
     }
 
     public QueryServicesOptions setSequenceSaltBuckets(int saltBuckets) {

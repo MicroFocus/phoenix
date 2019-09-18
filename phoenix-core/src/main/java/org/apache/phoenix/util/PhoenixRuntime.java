@@ -18,6 +18,7 @@
 package org.apache.phoenix.util;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.phoenix.schema.types.PDataType.ARRAY_TYPE_SUFFIX;
 
 import java.io.File;
@@ -50,7 +51,7 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.cli.PosixParser;
-import org.apache.commons.lang.StringEscapeUtils;
+import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.Mutation;
@@ -79,9 +80,12 @@ import org.apache.phoenix.schema.KeyValueSchema.KeyValueSchemaBuilder;
 import org.apache.phoenix.schema.MetaDataClient;
 import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PColumnFamily;
+import org.apache.phoenix.schema.PName;
+import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.PTableKey;
+import org.apache.phoenix.schema.PTableRef;
 import org.apache.phoenix.schema.PTableType;
 import org.apache.phoenix.schema.RowKeyValueAccessor;
 import org.apache.phoenix.schema.TableNotFoundException;
@@ -262,7 +266,6 @@ public class PhoenixRuntime {
                 String srcTable = execCmd.getSrcTable();
                 System.out.println("Starting upgrading table:" + srcTable + "... please don't kill it in between!!");
                 UpgradeUtil.upgradeTable(conn, srcTable);
-                UpgradeUtil.mapChildViewsToNamespace(conn, srcTable,props);
             } else if (execCmd.isUpgrade()) {
                 if (conn.getClientInfo(PhoenixRuntime.CURRENT_SCN_ATTRIB) != null) { throw new SQLException(
                         "May not specify the CURRENT_SCN property when upgrading"); }
@@ -461,13 +464,67 @@ public class PhoenixRuntime {
     }
 
     /**
-     * Get list of ColumnInfos that contain Column Name and its associated
-     * PDataType for an import. The supplied list of columns can be null -- if it is non-null,
-     * it represents a user-supplied list of columns to be imported.
-     *
+     * Similar to {@link #getTable(Connection, String, String, Long)} but returns the most recent
+     * PTable
+     */
+    public static PTable getTable(Connection conn, String tenantId, String fullTableName)
+            throws SQLException {
+        return getTable(conn, tenantId, fullTableName, HConstants.LATEST_TIMESTAMP);
+    }
+
+    /**
+     * Returns the PTable as of the timestamp provided. This method can be used to fetch tenant
+     * specific PTable through a global connection. A null timestamp would result in the client side
+     * metadata cache being used (ie. in case table metadata is already present it'll be returned).
+     * To get the latest metadata use {@link #getTable(Connection, String, String)}
+     * @param conn
+     * @param tenantId
+     * @param fullTableName
+     * @param timestamp
+     * @return PTable
+     * @throws SQLException
+     * @throws NullPointerException if conn or fullTableName is null
+     * @throws IllegalArgumentException if timestamp is negative
+     */
+    public static PTable getTable(Connection conn, @Nullable String tenantId, String fullTableName,
+            @Nullable Long timestamp) throws SQLException {
+        checkNotNull(conn);
+        checkNotNull(fullTableName);
+        if (timestamp != null) {
+            checkArgument(timestamp >= 0);
+        }
+        PTable table = null;
+        PhoenixConnection pconn = conn.unwrap(PhoenixConnection.class);
+        PName pTenantId = (tenantId == null) ? null : PNameFactory.newName(tenantId);
+        try {
+            PTableRef tableref = pconn.getTableRef(new PTableKey(pTenantId, fullTableName));
+            if (timestamp == null
+                    || (tableref != null && tableref.getResolvedTimeStamp() == timestamp)) {
+                table = tableref.getTable();
+            } else {
+                throw new TableNotFoundException(fullTableName);
+            }
+        } catch (TableNotFoundException e) {
+            String schemaName = SchemaUtil.getSchemaNameFromFullName(fullTableName);
+            String tableName = SchemaUtil.getTableNameFromFullName(fullTableName);
+            MetaDataMutationResult result =
+                    new MetaDataClient(pconn).updateCache(pTenantId, schemaName, tableName, false,
+                        timestamp);
+            if (result.getMutationCode() != MutationCode.TABLE_ALREADY_EXISTS) {
+                throw e;
+            }
+            table = result.getTable();
+        }
+        return table;
+    }
+
+    /**
+     * Get list of ColumnInfos that contain Column Name and its associated PDataType for an import.
+     * The supplied list of columns can be null -- if it is non-null, it represents a user-supplied
+     * list of columns to be imported.
      * @param conn Phoenix connection from which metadata will be read
      * @param tableName Phoenix table name whose columns are to be checked. Can include a schema
-     *                  name
+     *            name
      * @param columns user-supplied list of import columns, can be null
      */
     public static List<ColumnInfo> generateColumnInfo(Connection conn,
@@ -1155,7 +1212,7 @@ public class PhoenixRuntime {
         return values.toArray();
     }
     
-    private static KeyValueSchema buildKeyValueSchema(List<PColumn> columns) {
+    public static KeyValueSchema buildKeyValueSchema(List<PColumn> columns) {
         KeyValueSchemaBuilder builder = new KeyValueSchemaBuilder(getMinNullableIndex(columns));
         for (PColumn col : columns) {
             builder.addField(col);

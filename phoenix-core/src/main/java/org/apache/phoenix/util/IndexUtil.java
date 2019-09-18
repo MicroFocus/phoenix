@@ -20,6 +20,7 @@ package org.apache.phoenix.util;
 import static org.apache.phoenix.coprocessor.MetaDataProtocol.PHOENIX_MAJOR_VERSION;
 import static org.apache.phoenix.coprocessor.MetaDataProtocol.PHOENIX_MINOR_VERSION;
 import static org.apache.phoenix.coprocessor.MetaDataProtocol.PHOENIX_PATCH_NUMBER;
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES;
 import static org.apache.phoenix.query.QueryConstants.LOCAL_INDEX_COLUMN_FAMILY_PREFIX;
 import static org.apache.phoenix.query.QueryConstants.VALUE_COLUMN_FAMILY;
 import static org.apache.phoenix.query.QueryConstants.VALUE_COLUMN_QUALIFIER;
@@ -40,10 +41,10 @@ import java.util.Map;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
+import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
@@ -100,7 +101,10 @@ import org.apache.phoenix.schema.ColumnRef;
 import org.apache.phoenix.schema.KeyValueSchema;
 import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PColumnFamily;
+import org.apache.phoenix.schema.PColumnImpl;
 import org.apache.phoenix.schema.PIndexState;
+import org.apache.phoenix.schema.PName;
+import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
 import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
@@ -116,6 +120,7 @@ import org.apache.phoenix.schema.types.PDecimal;
 import org.apache.phoenix.schema.types.PLong;
 import org.apache.phoenix.schema.types.PVarbinary;
 import org.apache.phoenix.schema.types.PVarchar;
+import org.apache.phoenix.transaction.PhoenixTransactionProvider.Feature;
 
 import com.google.common.collect.Lists;
 
@@ -139,7 +144,7 @@ public class IndexUtil {
     
     // Since we cannot have nullable fixed length in a row key
     // we need to translate to variable length. The verification that we have a valid index
-    // row key was already done, so here we just need to covert from one built-in type to
+    // row key was already done, so here we just need to convert from one built-in type to
     // another.
     public static PDataType getIndexColumnDataType(boolean isNullable, PDataType dataType) {
         if (dataType == null || !isNullable || !dataType.isFixedWidth()) {
@@ -194,6 +199,17 @@ public class IndexUtil {
         String dataColumnFamilyName = SchemaUtil.isPKColumn(dataColumn) ? null : dataColumn.getFamilyName().getString();
         return getIndexColumnName(dataColumnFamilyName, dataColumn.getName().getString());
     }
+    
+	public static PColumn getIndexPKColumn(int position, PColumn dataColumn) {
+		assert (SchemaUtil.isPKColumn(dataColumn));
+		PName indexColumnName = PNameFactory.newName(getIndexColumnName(null, dataColumn.getName().getString()));
+		PColumn column = new PColumnImpl(indexColumnName, null, dataColumn.getDataType(), dataColumn.getMaxLength(),
+				dataColumn.getScale(), dataColumn.isNullable(), position, dataColumn.getSortOrder(),
+				dataColumn.getArraySize(), null, false, dataColumn.getExpressionStr(), dataColumn.isRowTimestamp(), false,
+				// TODO set the columnQualifierBytes correctly
+				/*columnQualifierBytes*/null, HConstants.LATEST_TIMESTAMP); 
+		return column;
+	}
 
     public static String getLocalIndexColumnFamily(String dataColumnFamilyName) {
         return dataColumnFamilyName == null ? null
@@ -798,9 +814,39 @@ public class IndexUtil {
 
     public static List<PTable> getClientMaintainedIndexes(PTable table) {
         Iterator<PTable> indexIterator = // Only maintain tables with immutable rows through this client-side mechanism
-        (table.isImmutableRows() || table.isTransactional()) ? IndexMaintainer.maintainedGlobalIndexes(table
-                .getIndexes().iterator()) : Collections.<PTable> emptyIterator();
+                (table.isTransactional() && table.getTransactionProvider().getTransactionProvider().isUnsupported(Feature.MAINTAIN_LOCAL_INDEX_ON_SERVER)) ?
+                         IndexMaintainer.maintainedIndexes(table.getIndexes().iterator()) :
+                             (table.isImmutableRows() || table.isTransactional()) ?
+                                IndexMaintainer.maintainedGlobalIndexes(table.getIndexes().iterator()) :
+                                    Collections.<PTable>emptyIterator();
         return Lists.newArrayList(indexIterator);
     }
-    
+    public static Result incrementCounterForIndex(PhoenixConnection conn, String failedIndexTable,long amount) throws IOException {
+        byte[] indexTableKey = SchemaUtil.getTableKeyFromFullName(failedIndexTable);
+        Increment incr = new Increment(indexTableKey);
+        incr.addColumn(TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES, amount);
+        try {
+            return conn.getQueryServices()
+                    .getTable(SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME,
+                            conn.getQueryServices().getProps()).getName())
+                    .increment(incr);
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    public static long getIndexPendingDisableCount(PhoenixConnection conn, String failedIndexTable) throws IOException {
+        byte[] indexTableKey = SchemaUtil.getTableKeyFromFullName(failedIndexTable);
+        Get get = new Get(indexTableKey);
+        get.addColumn(TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES);
+        try {
+            Result result = conn.getQueryServices()
+                    .getTable(SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME,
+                            conn.getQueryServices().getProps()).getName())
+                    .get(get);
+            return Bytes.toLong(result.getValue(TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES));
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
 }

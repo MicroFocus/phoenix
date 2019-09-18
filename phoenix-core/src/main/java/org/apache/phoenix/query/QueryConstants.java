@@ -162,7 +162,9 @@ public interface QueryConstants {
     public static final int NANOS_IN_SECOND = BigDecimal.valueOf(Math.pow(10, 9)).intValue();
     public static final int DIVERGED_VIEW_BASE_COLUMN_COUNT = -100;
     public static final int BASE_TABLE_BASE_COLUMN_COUNT = -1;
-    
+
+    // custom TagType
+    public static final byte VIEW_MODIFIED_PROPERTY_TAG_TYPE = (byte) 70;
     /**
      * We mark counter values 0 to 10 as reserved. Value 0 is used by {@link #ENCODED_EMPTY_COLUMN_NAME}. Values 1-10
      * are reserved for special column qualifiers returned by Phoenix co-processors.
@@ -192,7 +194,8 @@ public interface QueryConstants {
             DISABLE_WAL + " BOOLEAN,\n" +
             MULTI_TENANT + " BOOLEAN,\n" +
             VIEW_TYPE + " UNSIGNED_TINYINT,\n" +
-            VIEW_INDEX_ID + " SMALLINT,\n" +
+            VIEW_INDEX_ID + " BIGINT,\n" +
+            VIEW_INDEX_ID_DATA_TYPE + " INTEGER,\n" +
             // Column metadata (will be null for table row)
             DATA_TYPE + " INTEGER," +
             COLUMN_SIZE + " INTEGER," +
@@ -245,7 +248,6 @@ public interface QueryConstants {
             + TABLE_SCHEM + "," + TABLE_NAME + "," + COLUMN_NAME + "," + COLUMN_FAMILY + "))\n" +
             HConstants.VERSIONS + "=%s,\n" +
             ColumnFamilyDescriptorBuilder.KEEP_DELETED_CELLS + "=%s,\n" +
-            // Install split policy to prevent a tenant's metadata from being split across regions.
             TableDescriptorBuilder.SPLIT_POLICY + "='" + MetaDataSplitPolicy.class.getName() + "',\n" + 
             PhoenixDatabaseMetaData.TRANSACTIONAL + "=" + Boolean.FALSE;
 
@@ -345,4 +347,54 @@ public interface QueryConstants {
     public static final String HASH_JOIN_CACHE_RETRIES = "hashjoin.client.retries.number";
     public static final int DEFAULT_HASH_JOIN_CACHE_RETRIES = 5;
     
+	// Links from parent to child views are stored in a separate table for
+	// scalability
+	public static final String CREATE_CHILD_LINK_METADATA = "CREATE TABLE " + SYSTEM_CATALOG_SCHEMA + ".\"" +
+            SYSTEM_CHILD_LINK_TABLE + "\"(\n" +
+			// PK columns
+			TENANT_ID + " VARCHAR NULL," +
+            TABLE_SCHEM + " VARCHAR NULL," +
+            TABLE_NAME + " VARCHAR NOT NULL," +
+            COLUMN_NAME + " VARCHAR NULL," +
+            COLUMN_FAMILY + " VARCHAR NULL," +
+            LINK_TYPE + " UNSIGNED_TINYINT,\n" +
+            "CONSTRAINT " + SYSTEM_TABLE_PK_NAME + " PRIMARY KEY (" + TENANT_ID + "," + TABLE_SCHEM + "," + TABLE_NAME + "," +
+            COLUMN_NAME + "," + COLUMN_FAMILY + "))\n" +
+            HConstants.VERSIONS + "=%s,\n" +
+            ColumnFamilyDescriptorBuilder.KEEP_DELETED_CELLS + "=%s,\n" +
+            PhoenixDatabaseMetaData.TRANSACTIONAL + "=" + Boolean.FALSE;
+	
+	public static final String CREATE_MUTEX_METADTA =
+            "CREATE IMMUTABLE TABLE " + SYSTEM_CATALOG_SCHEMA + ".\"" + SYSTEM_MUTEX_TABLE_NAME + "\"(\n" +
+             // Pk columns
+            TENANT_ID + " VARCHAR NULL," +
+            TABLE_SCHEM + " VARCHAR NULL," +
+	        TABLE_NAME + " VARCHAR NOT NULL," +
+	        COLUMN_NAME + " VARCHAR NULL," + // null for table row
+	        COLUMN_FAMILY + " VARCHAR NULL " + // using for CF to uniqueness for columns
+	        "CONSTRAINT " + SYSTEM_TABLE_PK_NAME + " PRIMARY KEY (" + TENANT_ID + ","
+	        + TABLE_SCHEM + "," + TABLE_NAME + "," + COLUMN_NAME + "," + COLUMN_FAMILY + "))\n" +
+	        HConstants.VERSIONS + "=%s,\n" +
+	        ColumnFamilyDescriptorBuilder.KEEP_DELETED_CELLS + "=%s,\n" +
+	        PhoenixDatabaseMetaData.TRANSACTIONAL + "=" + Boolean.FALSE;
+
+	public static final String CREATE_TASK_METADATA =
+            "CREATE TABLE " + SYSTEM_CATALOG_SCHEMA + ".\"" + SYSTEM_TASK_TABLE + "\"(\n" +
+            // PK columns
+            TASK_TYPE + " UNSIGNED_TINYINT NOT NULL," +
+            TASK_TS + " TIMESTAMP NOT NULL," +
+            TENANT_ID + " VARCHAR NULL," +
+            TABLE_SCHEM + " VARCHAR NULL," +
+            TABLE_NAME + " VARCHAR NOT NULL,\n" +
+            // Non-PK columns
+            TASK_STATUS + " VARCHAR NULL," +
+            TASK_END_TS + " TIMESTAMP NULL," +
+            TASK_PRIORITY + " UNSIGNED_TINYINT NULL," +
+            TASK_DATA + " VARCHAR NULL,\n" +
+            "CONSTRAINT " + SYSTEM_TABLE_PK_NAME + " PRIMARY KEY (" + TASK_TYPE + "," + TASK_TS + " ROW_TIMESTAMP," + TENANT_ID + "," + TABLE_SCHEM + "," +
+            TABLE_NAME + "))\n" +
+            HConstants.VERSIONS + "=%s,\n" +
+            ColumnFamilyDescriptorBuilder.KEEP_DELETED_CELLS + "=%s,\n" +
+            ColumnFamilyDescriptorBuilder.TTL + "=" + TASK_TABLE_TTL + ",\n" +     // 10 days
+            PhoenixDatabaseMetaData.TRANSACTIONAL + "=" + Boolean.FALSE;
 }

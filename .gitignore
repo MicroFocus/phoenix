@@ -26,5 +26,6 @@ target/
 release/
 RESULTS/
 CSV_EXPORT/
+.DS_Store
 
 .DS_Store

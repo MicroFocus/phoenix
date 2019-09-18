@@ -36,6 +36,7 @@ import static org.junit.Assert.fail;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.ServerSocket;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -47,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 
@@ -67,6 +69,7 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
 import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
+import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.ipc.CoprocessorRpcUtils.BlockingRpcCallback;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
@@ -124,6 +127,7 @@ import org.apache.phoenix.schema.stats.GuidePostsInfo;
 import org.apache.phoenix.schema.stats.GuidePostsKey;
 import org.apache.phoenix.schema.tuple.Tuple;
 import org.apache.phoenix.schema.types.PDataType;
+import org.apache.phoenix.transaction.TransactionFactory;
 
 import com.google.common.base.Objects;
 import com.google.common.collect.Lists;
@@ -134,7 +138,7 @@ public class TestUtil {
     private static final Log LOG = LogFactory.getLog(TestUtil.class);
     
     private static final Long ZERO = new Long(0);
-    public static final String DEFAULT_SCHEMA_NAME = "";
+    public static final String DEFAULT_SCHEMA_NAME = "S";
     public static final String DEFAULT_DATA_TABLE_NAME = "T";
     public static final String DEFAULT_INDEX_TABLE_NAME = "I";
     public static final String DEFAULT_DATA_TABLE_FULL_NAME = SchemaUtil.getTableName(DEFAULT_SCHEMA_NAME, "T");
@@ -352,6 +356,11 @@ public class TestUtil {
 
     public static Expression substr(Expression e, Object offset, Object length) {
         return  new SubstrFunction(Arrays.asList(e, LiteralExpression.newConstant(offset), LiteralExpression.newConstant(length)));
+    }
+
+    public static Expression substr2(Expression e, Object offset) {
+
+        return  new SubstrFunction(Arrays.asList(e, LiteralExpression.newConstant(offset), LiteralExpression.newConstant(null)));
     }
 
     public static Expression columnComparison(CompareOp op, Expression c1, Expression c2) {
@@ -672,15 +681,6 @@ public class TestUtil {
         assertEquals(rs.getDate(6), date);
     }
     
-    public static String getTableName(Boolean mutable, Boolean transactional) {
-        StringBuilder tableNameBuilder = new StringBuilder(DEFAULT_DATA_TABLE_NAME);
-        if (mutable!=null)
-            tableNameBuilder.append(mutable ? "_MUTABLE" : "_IMMUTABLE");
-        if (transactional!=null)
-            tableNameBuilder.append(transactional ? "_TXN" : "_NON_TXN");
-        return tableNameBuilder.toString();
-    }
-
     public static ClientAggregators getSingleSumAggregator(String url, Properties props) throws SQLException {
         try (PhoenixConnection pconn = DriverManager.getConnection(url, props).unwrap(PhoenixConnection.class)) {
             PhoenixStatement statement = new PhoenixStatement(pconn);
@@ -724,6 +724,22 @@ public class TestUtil {
                 public String getExpressionStr() {
                     return null;
                 }
+
+                @Override
+                public long getTimestamp() {
+                    return HConstants.LATEST_TIMESTAMP;
+                }
+
+                @Override
+                public boolean isDerived() {
+                    return false;
+                }
+
+                @Override
+                public boolean isExcluded() {
+                    return false;
+                }
+
                 @Override
                 public boolean isRowTimestamp() {
                     return false;
@@ -1074,5 +1090,53 @@ public class TestUtil {
             }
         }
         assertTrue(!rs.next());
+    }
+    
+    public static Collection<Object[]> filterTxParamData(Collection<Object[]> data, int index) {
+        boolean runAllTests = true;
+        boolean runNoTests = true;
+        
+        for (TransactionFactory.Provider provider : TransactionFactory.Provider.values()) {
+            runAllTests &= provider.runTests();
+            runNoTests &= !provider.runTests();
+        }
+        if (runNoTests) {
+            return Collections.emptySet();
+        }
+        if (runAllTests) {
+            return data;
+        }
+        List<Object[]> filteredData = Lists.newArrayListWithExpectedSize(data.size());
+        for (Object[] params : data) {
+            String provider = (String)params[index];
+            if (provider == null || TransactionFactory.Provider.valueOf(provider).runTests()) {
+                filteredData.add(params);
+            }
+        }
+        return filteredData;
+    }
+    
+    /**
+     * Find a random free port in localhost for binding.
+     * @return A port number or -1 for failure.
+     */
+    public static int getRandomPort() {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            socket.setReuseAddress(true);
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            return -1;
+        }
+    }
+
+    public static boolean hasFilter(Scan scan, Class<? extends Filter> filterClass) {
+        Iterator<Filter> filterIter = ScanUtil.getFilterIterator(scan);
+        while(filterIter.hasNext()) {
+            Filter filter = filterIter.next();
+            if(filterClass.isInstance(filter)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

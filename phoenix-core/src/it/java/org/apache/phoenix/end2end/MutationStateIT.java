@@ -25,8 +25,14 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Iterator;
 import java.util.Properties;
 
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.execute.MutationState;
 import org.apache.phoenix.jdbc.PhoenixConnection;
@@ -53,7 +59,51 @@ public class MutationStateIT extends ParallelStatsDisabledIT {
     }
 
     @Test
-    public void testMaxMutationSize() throws Exception {
+    public void testDeleteMaxMutationSize() throws SQLException {
+        String tableName = generateUniqueName();
+        int NUMBER_OF_ROWS = 20;
+        String ddl = "CREATE TABLE " + tableName + " (V BIGINT PRIMARY KEY, K BIGINT)";
+        PhoenixConnection conn = (PhoenixConnection) DriverManager.getConnection(getUrl());
+        conn.createStatement().execute(ddl);
+
+        for(int i = 0; i < NUMBER_OF_ROWS; i++) {
+            conn.createStatement().execute(
+                    "UPSERT INTO " + tableName + " VALUES (" + i + ", "+ i + ")");
+            conn.commit();
+        }
+
+        Properties props = new Properties();
+        props.setProperty(QueryServices.MAX_MUTATION_SIZE_ATTRIB,
+                String.valueOf(NUMBER_OF_ROWS / 2));
+        PhoenixConnection connection =
+                (PhoenixConnection) DriverManager.getConnection(getUrl(), props);
+        connection.setAutoCommit(false);
+
+        try {
+            for(int i = 0; i < NUMBER_OF_ROWS; i++) {
+                connection.createStatement().execute(
+                        "DELETE FROM " + tableName + " WHERE K = " + i );
+            }
+        } catch (SQLException e) {
+            assertTrue(e.getMessage().contains(
+                    SQLExceptionCode.MAX_MUTATION_SIZE_EXCEEDED.getMessage()));
+        }
+
+        props.setProperty(QueryServices.MAX_MUTATION_SIZE_BYTES_ATTRIB, "10");
+        props.setProperty(QueryServices.MAX_MUTATION_SIZE_ATTRIB, "10000");
+        connection = (PhoenixConnection) DriverManager.getConnection(getUrl(), props);
+        connection.setAutoCommit(false);
+
+        try {
+            connection.createStatement().execute("DELETE FROM " + tableName );
+        } catch (SQLException e) {
+            assertTrue(e.getMessage().contains(
+                    SQLExceptionCode.MAX_MUTATION_SIZE_BYTES_EXCEEDED.getMessage()));
+        }
+    }
+
+    @Test
+    public void testUpsertMaxMutationSize() throws Exception {
         Properties connectionProperties = new Properties();
         connectionProperties.setProperty(QueryServices.MAX_MUTATION_SIZE_ATTRIB, "3");
         connectionProperties.setProperty(QueryServices.MAX_MUTATION_SIZE_BYTES_ATTRIB, "1000000");
@@ -70,6 +120,8 @@ public class MutationStateIT extends ParallelStatsDisabledIT {
         } catch (SQLException e) {
             assertEquals(SQLExceptionCode.MAX_MUTATION_SIZE_EXCEEDED.getErrorCode(),
                 e.getErrorCode());
+            assertTrue(e.getMessage().contains(
+                    SQLExceptionCode.MAX_MUTATION_SIZE_EXCEEDED.getMessage()));
         }
 
         // set the max mutation size (bytes) to a low value
@@ -83,6 +135,8 @@ public class MutationStateIT extends ParallelStatsDisabledIT {
         } catch (SQLException e) {
             assertEquals(SQLExceptionCode.MAX_MUTATION_SIZE_BYTES_EXCEEDED.getErrorCode(),
                 e.getErrorCode());
+            assertTrue(e.getMessage().contains(
+                    SQLExceptionCode.MAX_MUTATION_SIZE_BYTES_EXCEEDED.getMessage()));
         }
     }
 
@@ -157,5 +211,43 @@ public class MutationStateIT extends ParallelStatsDisabledIT {
         stmt.execute();
         assertTrue("Mutation state size should decrease", prevEstimatedSize+4 > state.getEstimatedSize());
     }
-    
+
+    @Test
+    public void testSplitMutationsIntoSameGroupForSingleRow() throws Exception {
+        String tableName = "TBL_" + generateUniqueName();
+        String indexName = "IDX_" + generateUniqueName();
+        Properties props = new Properties();
+        props.put("phoenix.mutate.batchSize", "2");
+        try (PhoenixConnection conn = DriverManager.getConnection(getUrl(), props).unwrap(PhoenixConnection.class)) {
+            conn.setAutoCommit(false);
+            conn.createStatement().executeUpdate(
+                    "CREATE TABLE "  + tableName + " ("
+                            + "A VARCHAR NOT NULL PRIMARY KEY,"
+                            + "B VARCHAR,"
+                            + "C VARCHAR,"
+                            + "D VARCHAR) COLUMN_ENCODED_BYTES = 0");
+            conn.createStatement().executeUpdate("CREATE INDEX " + indexName + " on "  + tableName + " (C) INCLUDE(D)");
+
+            conn.createStatement().executeUpdate("UPSERT INTO "  + tableName + "(A,B,C,D) VALUES ('A2','B2','C2','D2')");
+            conn.createStatement().executeUpdate("UPSERT INTO "  + tableName + "(A,B,C,D) VALUES ('A3','B3', 'C3', null)");
+            conn.commit();
+
+            Table htable = conn.getQueryServices().getTable(Bytes.toBytes(tableName));
+            Scan scan = new Scan();
+            scan.setRaw(true);
+            Iterator<Result> scannerIter = htable.getScanner(scan).iterator();
+            while (scannerIter.hasNext()) {
+                long ts = -1;
+                Result r = scannerIter.next();
+                for (Cell cell : r.listCells()) {
+                    if (ts == -1) {
+                        ts = cell.getTimestamp();
+                    } else {
+                        assertEquals("(" + cell.toString() + ") has different ts", ts, cell.getTimestamp());
+                    }
+                }
+            }
+            htable.close();
+        }
+    }
 }

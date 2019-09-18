@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -47,6 +48,7 @@ import org.apache.hadoop.hbase.coprocessor.ObserverContext;
 import org.apache.hadoop.hbase.coprocessor.ObserverContextImpl;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.ipc.RpcServer;
+import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.AccessControlProtos;
 import org.apache.hadoop.hbase.protobuf.generated.AccessControlProtos.AccessControlService;
 import org.apache.hadoop.hbase.regionserver.RegionCoprocessorHost;
@@ -59,11 +61,7 @@ import org.apache.hadoop.hbase.security.access.AuthResult;
 import org.apache.hadoop.hbase.security.access.Permission;
 import org.apache.hadoop.hbase.security.access.Permission.Action;
 import org.apache.hadoop.hbase.security.access.UserPermission;
-import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.util.Bytes;
-import com.google.protobuf.ByteString;
-import com.google.protobuf.RpcCallback;
-import com.google.protobuf.RpcController;
 import org.apache.phoenix.coprocessor.PhoenixMetaDataCoprocessorHost.PhoenixMetaDataControllerEnvironment;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
@@ -72,11 +70,15 @@ import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTableType;
 import org.apache.phoenix.util.MetaDataUtil;
 
+import com.google.protobuf.ByteString;
+import com.google.protobuf.RpcCallback;
+import com.google.protobuf.RpcController;
+
 
 public class PhoenixAccessController extends BaseMetaDataEndpointObserver {
 
     private PhoenixMetaDataControllerEnvironment env;
-    private ArrayList<MasterObserver> accessControllers;
+    AtomicReference<ArrayList<MasterObserver>> accessControllers = new AtomicReference<>();
     private boolean accessCheckEnabled;
     private UserProvider userProvider;
     public static final Log LOG = LogFactory.getLog(PhoenixAccessController.class);
@@ -89,20 +91,18 @@ public class PhoenixAccessController extends BaseMetaDataEndpointObserver {
     }
     
     private List<MasterObserver> getAccessControllers() throws IOException {
-        if (accessControllers == null) {
-            synchronized (this) {
-                if (accessControllers == null) {
-                    accessControllers = new ArrayList<MasterObserver>();
-                    RegionCoprocessorHost cpHost = this.env.getCoprocessorHost();
-                    for (RegionCoprocessor cp : cpHost.findCoprocessors(RegionCoprocessor.class)) {
-                        if (cp instanceof AccessControlService.Interface && cp instanceof MasterObserver) {
-                            accessControllers.add((MasterObserver)cp);
-                        }
-                    }
+        ArrayList<MasterObserver> oldAccessControllers = accessControllers.get();
+        if (oldAccessControllers == null) {
+            oldAccessControllers = new ArrayList<>();
+            RegionCoprocessorHost cpHost = this.env.getCoprocessorHost();
+            for (RegionCoprocessor cp : cpHost.findCoprocessors(RegionCoprocessor.class)) {
+                if (cp instanceof AccessControlService.Interface && cp instanceof MasterObserver) {
+                    oldAccessControllers.add((MasterObserver)cp);
                 }
             }
+            accessControllers.set(oldAccessControllers);
         }
-        return accessControllers;
+        return accessControllers.get();
     }
 
     public ObserverContext<MasterCoprocessorEnvironment> getMasterObsevrverContext() throws IOException {
@@ -418,7 +418,7 @@ public class PhoenixAccessController extends BaseMetaDataEndpointObserver {
                 final List<UserPermission> userPermissions = new ArrayList<UserPermission>();
                 try (Connection connection = ConnectionFactory.createConnection(env.getConfiguration())) {
                     // Merge permissions from all accessController coprocessors loaded in memory
-                    for (MasterObserver service : accessControllers) {
+                    for (MasterObserver service : getAccessControllers()) {
                         // Use AccessControlClient API's if the accessController is an instance of org.apache.hadoop.hbase.security.access.AccessController
                         if (service.getClass().getName().equals(org.apache.hadoop.hbase.security.access.AccessController.class.getName())) {
                             userPermissions.addAll(AccessControlClient.getUserPermissions(connection, tableName.getNameAsString()));
@@ -464,7 +464,7 @@ public class PhoenixAccessController extends BaseMetaDataEndpointObserver {
 
             private void callGetUserPermissionsRequest(final List<UserPermission> userPermissions, AccessControlService.Interface service
                     , AccessControlProtos.GetUserPermissionsRequest request, RpcController controller) {
-                ((AccessControlService.Interface)service).getUserPermissions(controller, request,
+                service.getUserPermissions(controller, request,
                     new RpcCallback<AccessControlProtos.GetUserPermissionsResponse>() {
                         @Override
                         public void run(AccessControlProtos.GetUserPermissionsResponse message) {

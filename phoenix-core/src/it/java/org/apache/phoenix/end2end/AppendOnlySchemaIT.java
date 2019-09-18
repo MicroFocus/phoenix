@@ -70,7 +70,7 @@ public class AppendOnlySchemaIT extends ParallelStatsDisabledIT {
                 Mockito.spy(driver.getConnectionQueryServices(getUrl(),
                     PropertiesUtil.deepCopy(TEST_PROPERTIES)));
         Properties props = new Properties();
-        props.putAll(PhoenixEmbeddedDriver.DEFFAULT_PROPS.asMap());
+        props.putAll(PhoenixEmbeddedDriver.DEFAULT_PROPS.asMap());
 
         try (Connection conn1 = connectionQueryServices.connect(getUrl(), props);
                 Connection conn2 = sameClient ? conn1 : connectionQueryServices.connect(getUrl(), props)) {
@@ -109,7 +109,9 @@ public class AppendOnlySchemaIT extends ParallelStatsDisabledIT {
             }
             
             // verify getTable rpcs
-            verify(connectionQueryServices, sameClient ? never() : times(1)).getTable((PName)isNull(), eq(new byte[0]), eq(Bytes.toBytes(viewName)), anyLong(), anyLong());
+            verify(connectionQueryServices, sameClient ? never() : times(1)).getTable(
+                (PName) isNull(), eq(new byte[0]), eq(Bytes.toBytes(viewName)), anyLong(),
+                anyLong(), eq(false), eq(false), (PTable) isNull());
             
             // verify no create table rpcs
             verify(connectionQueryServices, never()).createTable(anyListOf(Mutation.class),
