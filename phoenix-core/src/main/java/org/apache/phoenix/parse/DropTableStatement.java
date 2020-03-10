@@ -25,15 +25,13 @@ public class DropTableStatement extends MutableStatement {
     private final boolean ifExists;
     private final PTableType tableType;
     private final boolean cascade;
-    private final boolean skipAddingParentColumns;
     
 
-    public DropTableStatement(TableName tableName, PTableType tableType, boolean ifExists, boolean cascade, boolean skipAddingParentColumns) {
+    protected DropTableStatement(TableName tableName, PTableType tableType, boolean ifExists, boolean cascade) {
         this.tableName = tableName;
         this.tableType = tableType;
         this.ifExists = ifExists;
         this.cascade = cascade;
-        this.skipAddingParentColumns = skipAddingParentColumns;
     }
     
     @Override
@@ -61,8 +59,4 @@ public class DropTableStatement extends MutableStatement {
     public Operation getOperation() {
         return Operation.DELETE;
     }
-
-	public boolean getSkipAddingParentColumns() {
-		return skipAddingParentColumns;
-	}
 }

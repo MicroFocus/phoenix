@@ -74,7 +74,6 @@ public class StatementContext {
     private final ImmutableBytesWritable tempPtr;
     private final PhoenixStatement statement;
     private final Map<PColumn, Integer> dataColumns;
-    private Map<Long, Boolean> retryingPersistentCache;
 
     private long currentTime = QueryConstants.UNSET_TIMESTAMP;
     private ScanRanges scanRanges = ScanRanges.EVERYTHING;
@@ -96,27 +95,31 @@ public class StatementContext {
      *  Constructor that lets you override whether or not to collect request level metrics.
      */
     public StatementContext(PhoenixStatement statement, boolean collectRequestLevelMetrics) {
-        this(statement, FromCompiler.EMPTY_TABLE_RESOLVER, new Scan(), new SequenceManager(statement), collectRequestLevelMetrics);
+        this(statement, FromCompiler.EMPTY_TABLE_RESOLVER, new BindManager(statement.getParameters()), new Scan(), new SequenceManager(statement), collectRequestLevelMetrics);
     }
 
     public StatementContext(PhoenixStatement statement, Scan scan) {
-        this(statement, FromCompiler.EMPTY_TABLE_RESOLVER, scan, new SequenceManager(statement));
+        this(statement, FromCompiler.EMPTY_TABLE_RESOLVER, new BindManager(statement.getParameters()), scan, new SequenceManager(statement));
     }
 
     public StatementContext(PhoenixStatement statement, ColumnResolver resolver) {
-        this (statement, resolver, new Scan(), new SequenceManager(statement));
+        this(statement, resolver, new BindManager(statement.getParameters()), new Scan(), new SequenceManager(statement));
     }
 
     public StatementContext(PhoenixStatement statement, ColumnResolver resolver, Scan scan, SequenceManager seqManager) {
-        this(statement, resolver, scan, seqManager, statement.getConnection().isRequestLevelMetricsEnabled());
+        this(statement, resolver, new BindManager(statement.getParameters()), scan, seqManager);
     }
-    
-    public StatementContext(PhoenixStatement statement, ColumnResolver resolver, Scan scan, SequenceManager seqManager, boolean isRequestMetricsEnabled) {
+
+    public StatementContext(PhoenixStatement statement, ColumnResolver resolver, BindManager binds, Scan scan, SequenceManager seqManager) {
+        this(statement, resolver, binds, scan, seqManager, statement.getConnection().isRequestLevelMetricsEnabled());
+    }
+
+    public StatementContext(PhoenixStatement statement, ColumnResolver resolver, BindManager binds, Scan scan, SequenceManager seqManager, boolean isRequestMetricsEnabled) {
         this.statement = statement;
         this.resolver = resolver;
         this.scan = scan;
         this.sequences = seqManager;
-        this.binds = new BindManager(statement.getParameters());
+        this.binds = binds;
         this.aggregates = new AggregationManager();
         this.expressions = new ExpressionManager();
         PhoenixConnection connection = statement.getConnection();
@@ -139,7 +142,6 @@ public class StatementContext {
         this.subqueryResults = Maps.<SelectStatement, Object> newHashMap();
         this.readMetricsQueue = new ReadMetricQueue(isRequestMetricsEnabled,connection.getLogLevel());
         this.overAllQueryMetrics = new OverAllQueryMetrics(isRequestMetricsEnabled,connection.getLogLevel());
-        this.retryingPersistentCache = Maps.<Long, Boolean> newHashMap();
     }
 
     /**
@@ -260,9 +262,10 @@ public class StatementContext {
     public long getCurrentTime() throws SQLException {
         long ts = this.getCurrentTable().getCurrentTime();
         // if the table is transactional then it is only resolved once per query, so we can't use the table timestamp
-        if (this.getCurrentTable().getTable().getType() != PTableType.PROJECTED && !this
-                .getCurrentTable().getTable().isTransactional() && ts != QueryConstants
-                .UNSET_TIMESTAMP) {
+        if (this.getCurrentTable().getTable().getType() != PTableType.SUBQUERY
+                && this.getCurrentTable().getTable().getType() != PTableType.PROJECTED
+                && !this.getCurrentTable().getTable().isTransactional()
+                && ts != QueryConstants.UNSET_TIMESTAMP) {
             return ts;
         }
         if (currentTime != QueryConstants.UNSET_TIMESTAMP) {
@@ -328,22 +331,5 @@ public class StatementContext {
     public void setClientSideUpsertSelect(boolean isClientSideUpsertSelect) {
         this.isClientSideUpsertSelect = isClientSideUpsertSelect;
     }
-
-    /*
-     * setRetryingPersistentCache can be used to override the USE_PERSISTENT_CACHE hint and disable the use of the
-     * persistent cache for a specific cache ID. This can be used to retry queries that failed when using the persistent
-     * cache.
-     */
-    public void setRetryingPersistentCache(long cacheId) {
-        retryingPersistentCache.put(cacheId, true);
-    }
-
-    public boolean getRetryingPersistentCache(long cacheId) {
-        Boolean retrying = retryingPersistentCache.get(cacheId);
-        if (retrying == null) {
-            return false;
-        } else {
-            return retrying;
-        }
-    }
+    
 }

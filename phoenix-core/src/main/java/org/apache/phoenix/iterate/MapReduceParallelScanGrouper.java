@@ -18,7 +18,6 @@
 package org.apache.phoenix.iterate;
 
 import java.sql.SQLException;
-import java.util.Collections;
 import java.util.List;
 
 import com.google.common.base.Preconditions;
@@ -29,8 +28,6 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.PrivateCellUtil;
-import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
@@ -49,7 +46,7 @@ public class MapReduceParallelScanGrouper implements ParallelScanGrouper {
 
 	private static final MapReduceParallelScanGrouper INSTANCE = new MapReduceParallelScanGrouper();
 
-    public static MapReduceParallelScanGrouper getInstance() {
+  public static MapReduceParallelScanGrouper getInstance() {
 		return INSTANCE;
 	}
 
@@ -83,39 +80,18 @@ public class MapReduceParallelScanGrouper implements ParallelScanGrouper {
 		}
 	}
 
-	/**
-	 * Get list of region locations from SnapshotManifest
-	 * BaseResultIterators assume that regions are sorted using RegionInfo.COMPARATOR
-	 */
 	private List<HRegionLocation> getRegionLocationsFromManifest(SnapshotManifest manifest) {
 		List<SnapshotRegionManifest> regionManifests = manifest.getRegionManifests();
 		Preconditions.checkNotNull(regionManifests);
 
-		List<RegionInfo> regionInfos = Lists.newArrayListWithCapacity(regionManifests.size());
-		List<HRegionLocation> hRegionLocations = Lists.newArrayListWithCapacity(regionManifests.size());
+		List<HRegionLocation> regionLocations = Lists.newArrayListWithCapacity(regionManifests.size());
 
 		for (SnapshotRegionManifest regionManifest : regionManifests) {
-			RegionInfo regionInfo = ProtobufUtil.toRegionInfo(regionManifest.getRegionInfo());
-			if (isValidRegion(regionInfo)) {
-				regionInfos.add(regionInfo);
-			}
+			regionLocations.add(new HRegionLocation(
+					ProtobufUtil.toRegionInfo(regionManifest.getRegionInfo()), null));
 		}
 
-		regionInfos.sort(RegionInfo.COMPARATOR);
-
-		for (RegionInfo regionInfo : regionInfos) {
-			hRegionLocations.add(new HRegionLocation(regionInfo, null));
-		}
-
-		return hRegionLocations;
-	}
-
-	// Exclude offline split parent regions
-	private boolean isValidRegion(RegionInfo hri) {
-		if (hri.isOffline() && (hri.isSplit() || hri.isSplitParent())) {
-			return false;
-		}
-		return true;
+		return regionLocations;
 	}
 
 	private String getSnapshotName(Configuration conf) {

@@ -17,10 +17,7 @@
  */
 package org.apache.phoenix.schema;
 
-import static org.apache.phoenix.schema.PTableImpl.getColumnsToClone;
-
 import java.sql.SQLException;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -30,6 +27,7 @@ import org.apache.phoenix.parse.PSchema;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.util.ReadOnlyProps;
+import org.apache.phoenix.util.SchemaUtil;
 import org.apache.phoenix.util.TimeKeeper;
 
 import com.google.common.collect.Lists;
@@ -123,11 +121,7 @@ public class PMetaDataImpl implements PMetaData {
                 }
                 newIndexes.add(table);
                 netGain -= oldParentRef.getEstimatedSize();
-                newParentTable = PTableImpl.builderWithColumns(oldParentRef.getTable(),
-                        getColumnsToClone(oldParentRef.getTable()))
-                        .setIndexes(newIndexes)
-                        .setTimeStamp(table.getTimeStamp())
-                        .build();
+                newParentTable = PTableImpl.makePTable(oldParentRef.getTable(), table.getTimeStamp(), newIndexes);
                 newParentTableRef = tableRefFactory.makePTableRef(newParentTable, this.timeKeeper.getCurrentTime(), parentResolvedTimestamp);
                 netGain += newParentTableRef.getEstimatedSize();
             }
@@ -179,14 +173,10 @@ public class PMetaDataImpl implements PMetaData {
                     PTable index = newIndexes.get(i);
                     if (index.getName().getString().equals(tableName)) {
                         newIndexes.remove(i);
-                        PTableImpl.Builder parentTableBuilder =
-                                PTableImpl.builderWithColumns(parentTableRef.getTable(),
-                                        getColumnsToClone(parentTableRef.getTable()))
-                                .setIndexes(newIndexes == null ? Collections.emptyList() : newIndexes);
-                        if (tableTimeStamp != HConstants.LATEST_TIMESTAMP) {
-                            parentTableBuilder.setTimeStamp(tableTimeStamp);
-                        }
-                        PTable parentTable = parentTableBuilder.build();
+                        PTable parentTable = PTableImpl.makePTable(
+                                parentTableRef.getTable(),
+                                tableTimeStamp == HConstants.LATEST_TIMESTAMP ? parentTableRef.getTable().getTimeStamp() : tableTimeStamp,
+                                newIndexes);
                         metaData.put(parentTable.getKey(), tableRefFactory.makePTableRef(parentTable, this.timeKeeper.getCurrentTime(), parentTableRef.getResolvedTimeStamp()));
                         break;
                     }
@@ -224,14 +214,11 @@ public class PMetaDataImpl implements PMetaData {
             // Update position of columns that follow removed column
             for (int i = position+1; i < oldColumns.size(); i++) {
                 PColumn oldColumn = oldColumns.get(i);
-                PColumn newColumn = new PColumnImpl(oldColumn.getName(), oldColumn.getFamilyName(), oldColumn.getDataType(), oldColumn.getMaxLength(), oldColumn.getScale(), oldColumn.isNullable(), i-1+positionOffset, oldColumn.getSortOrder(), oldColumn.getArraySize(), oldColumn.getViewConstant(), oldColumn.isViewReferenced(), oldColumn.getExpressionStr(), oldColumn.isRowTimestamp(), oldColumn.isDynamic(), oldColumn.getColumnQualifierBytes(),
-                    oldColumn.getTimestamp());
+                PColumn newColumn = new PColumnImpl(oldColumn.getName(), oldColumn.getFamilyName(), oldColumn.getDataType(), oldColumn.getMaxLength(), oldColumn.getScale(), oldColumn.isNullable(), i-1+positionOffset, oldColumn.getSortOrder(), oldColumn.getArraySize(), oldColumn.getViewConstant(), oldColumn.isViewReferenced(), oldColumn.getExpressionStr(), oldColumn.isRowTimestamp(), oldColumn.isDynamic(), oldColumn.getColumnQualifierBytes());
                 columns.add(newColumn);
             }
-            table = PTableImpl.builderWithColumns(table, columns)
-                    .setTimeStamp(tableTimeStamp)
-                    .setSequenceNumber(tableSeqNum)
-                    .build();
+            
+            table = PTableImpl.makePTable(table, tableTimeStamp, tableSeqNum, columns);
         }
         tables.put(table.getKey(), tableRefFactory.makePTableRef(table, this.timeKeeper.getCurrentTime(), resolvedTime));
     }

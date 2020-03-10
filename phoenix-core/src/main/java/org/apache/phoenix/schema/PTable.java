@@ -151,26 +151,15 @@ public interface PTable extends PMetaDataEntity {
         PARENT_TABLE((byte)3),
         /**
          * Link from a parent table to its child view
-         * (these are stored in SYSTEM.CHILD_LINK for scalability)
          */
-        CHILD_TABLE((byte)4),
-        /**
-         * Link for an excluded (dropped) column
-         */
-        EXCLUDED_COLUMN((byte)5),
-        /**
-         * Link from an index on a view to its parent table
-         */
-        VIEW_INDEX_PARENT_TABLE((byte)6);
+        CHILD_TABLE((byte)4);
 
         private final byte[] byteValue;
         private final byte serializedValue;
-        private final byte[] serializedByteArrayValue;
 
         LinkType(byte serializedValue) {
             this.serializedValue = serializedValue;
             this.byteValue = Bytes.toBytes(this.name());
-            this.serializedByteArrayValue = new byte[] { serializedValue };
         }
 
         public byte[] getBytes() {
@@ -181,10 +170,6 @@ public interface PTable extends PMetaDataEntity {
             return this.serializedValue;
         }
 
-        public byte[] getSerializedValueAsByteArray() {
-            return serializedByteArrayValue;
-        }
-
         public static LinkType fromSerializedValue(byte serializedValue) {
             if (serializedValue < 1 || serializedValue > LinkType.values().length) {
                 return null;
@@ -192,60 +177,7 @@ public interface PTable extends PMetaDataEntity {
             return LinkType.values()[serializedValue-1];
         }
     }
-
-    public enum TaskType {
-        DROP_CHILD_VIEWS((byte)1),
-        INDEX_REBUILD((byte)2);
-
-        private final byte[] byteValue;
-        private final byte serializedValue;
-
-        TaskType(byte serializedValue) {
-            this.serializedValue = serializedValue;
-            this.byteValue = Bytes.toBytes(this.name());
-        }
-
-        public byte[] getBytes() {
-                return byteValue;
-        }
-
-        public byte getSerializedValue() {
-            return this.serializedValue;
-        }
-        public static TaskType getDefault() {
-            return DROP_CHILD_VIEWS;
-        }
-        public static TaskType fromSerializedValue(byte serializedValue) {
-            if (serializedValue < 1 || serializedValue > TaskType.values().length) {
-                    throw new IllegalArgumentException("Invalid TaskType " + serializedValue);
-            }
-            return TaskType.values()[serializedValue-1];
-        }
-    }
-
-    public enum TaskStatus {
-        CREATED {
-            public String toString() {
-                return  "CREATED";
-            }
-        },
-        STARTED {
-            public String toString() {
-                return  "STARTED";
-            }
-        },
-        COMPLETED {
-            public String toString() {
-                return  "COMPLETED";
-            }
-        },
-        FAILED {
-            public String toString() {
-                return  "FAILED";
-            }
-        },
-    }
-
+    
     public enum ImmutableStorageScheme implements ColumnValueEncoderDecoderSupplier {
         ONE_CELL_PER_COLUMN((byte)1) {
             @Override
@@ -602,12 +534,6 @@ public interface PTable extends PMetaDataEntity {
      * @return a list of all columns
      */
     List<PColumn> getColumns();
-    
-    /**
-     * Get all excluded columns 
-     * @return a list of excluded columns
-     */
-    List<PColumn> getExcludedColumns();
 
     /**
      * @return A list of the column families of this table
@@ -760,7 +686,7 @@ public interface PTable extends PMetaDataEntity {
     ViewType getViewType();
     String getViewStatement();
     Long getViewIndexId();
-    PDataType getviewIndexIdType();
+    PDataType getViewIndexType();
     PTableKey getKey();
 
     IndexType getIndexType();
@@ -798,9 +724,7 @@ public interface PTable extends PMetaDataEntity {
     QualifierEncodingScheme getEncodingScheme();
     EncodedCQCounter getEncodedCQCounter();
     Boolean useStatsForParallelization();
-    boolean hasViewModifiedUpdateCacheFrequency();
-    boolean hasViewModifiedUseStatsForParallelization();
-
+    
     /**
      * Class to help track encoded column qualifier counters per column family.
      */

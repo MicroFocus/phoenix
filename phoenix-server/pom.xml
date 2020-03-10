@@ -27,7 +27,7 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>5.0.0-cdh6.1.1</version>
+    <version>5.0.0.7.0.3.0-79</version>
   </parent>
   <artifactId>phoenix-server</artifactId>
   <name>Phoenix Server</name>
@@ -62,9 +62,12 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
-        <configuration>
-          <finalName>phoenix-${project.version}-server</finalName>
-        </configuration>
+        <executions>
+          <execution>
+            <id>default-jar</id>
+            <phase>none</phase>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -135,7 +138,7 @@
                         <exclude>sqlline:sqlline</exclude>
                         <exclude>log4j:log4j</exclude>
                         <exclude>org.slf4j:slf4j-api</exclude>
-                        <exclude>org.slf4j:slf4j-log4j</exclude>
+                        <exclude>org.slf4j:slf4j-log4j12</exclude>
                     </excludes>
                 </artifactSet>
                 <filters>
@@ -196,10 +199,6 @@
                       <shadedPattern>${shaded.package}.org.apache.tephra</shadedPattern>
                     </relocation>
                     <relocation>
-                        <pattern>org.apache.omid</pattern>
-                        <shadedPattern>${shaded.package}.org.apache.omid</shadedPattern>
-                    </relocation>
-                    <relocation>
                       <pattern>org.apache.twill</pattern>
                       <shadedPattern>${shaded.package}.org.apache.twill</shadedPattern>
                     </relocation>
@@ -207,7 +206,6 @@
                       <pattern>org.apache.thrift</pattern>
                       <shadedPattern>${shaded.package}.org.apache.thrift</shadedPattern>
                     </relocation>
-
                     <relocation>
                       <!-- This would shade protobuf, but we don't package it as hbase provides it
                            for all CPEPs. Similarly, we need to exclude the package so that

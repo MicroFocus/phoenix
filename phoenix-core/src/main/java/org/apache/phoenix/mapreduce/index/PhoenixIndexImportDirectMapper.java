@@ -68,8 +68,6 @@ public class PhoenixIndexImportDirectMapper extends
     private long batchSizeBytes;
 
     private MutationState mutationState;
-    private int currentBatchCount = 0;
-
 
     @Override
     protected void setup(final Context context) throws IOException, InterruptedException {
@@ -105,8 +103,7 @@ public class PhoenixIndexImportDirectMapper extends
             final String upsertQuery = PhoenixConfigurationUtil.getUpsertStatement(configuration);
             this.pStatement = connection.prepareStatement(upsertQuery);
 
-        } catch (Exception e) {
-            tryClosingResources();
+        } catch (SQLException e) {
             throw new RuntimeException(e);
         }
     }
@@ -116,7 +113,6 @@ public class PhoenixIndexImportDirectMapper extends
             throws IOException, InterruptedException {
 
         try {
-            currentBatchCount++;
             final List<Object> values = record.getValues();
             indxWritable.setValues(values);
             indxWritable.write(this.pStatement);
@@ -129,8 +125,9 @@ public class PhoenixIndexImportDirectMapper extends
             }
             // Keep accumulating Mutations till batch size
             mutationState.join(currentMutationState);
+
             // Write Mutation Batch
-            if (currentBatchCount % batchSize == 0) {
+            if (context.getCounter(PhoenixJobCounters.INPUT_RECORDS).getValue() % batchSize == 0) {
                 writeBatch(mutationState, context);
                 mutationState = null;
             }
@@ -139,7 +136,7 @@ public class PhoenixIndexImportDirectMapper extends
             context.progress();
         } catch (SQLException e) {
             LOG.error(" Error {}  while read/write of a record ", e.getMessage());
-            context.getCounter(PhoenixJobCounters.FAILED_RECORDS).increment(currentBatchCount);
+            context.getCounter(PhoenixJobCounters.FAILED_RECORDS).increment(1);
             throw new RuntimeException(e);
         }
         context.getCounter(PhoenixJobCounters.INPUT_RECORDS).increment(1);
@@ -160,7 +157,6 @@ public class PhoenixIndexImportDirectMapper extends
                 mutationPair.getSecond().size());
         }
         connection.rollback();
-        currentBatchCount = 0;
     }
 
     @Override
@@ -177,23 +173,20 @@ public class PhoenixIndexImportDirectMapper extends
             super.cleanup(context);
         } catch (SQLException e) {
             LOG.error(" Error {}  while read/write of a record ", e.getMessage());
-            context.getCounter(PhoenixJobCounters.FAILED_RECORDS).increment(currentBatchCount);
+            context.getCounter(PhoenixJobCounters.FAILED_RECORDS).increment(1);
             throw new RuntimeException(e);
         } finally {
-            tryClosingResources();
-        }
-    }
-
-    private void tryClosingResources() throws IOException {
-        if (this.connection != null) {
-            try {
-                this.connection.close();
-            } catch (SQLException e) {
-                LOG.error("Error while closing connection in the PhoenixIndexMapper class ", e);
+            if (connection != null) {
+                try {
+                    connection.close();
+                } catch (SQLException e) {
+                    LOG.error("Error {} while closing connection in the PhoenixIndexMapper class ",
+                        e.getMessage());
+                }
             }
-        }
-        if (this.writer != null) {
-            this.writer.close();
+            if (writer != null) {
+                writer.close();
+            }
         }
     }
 }

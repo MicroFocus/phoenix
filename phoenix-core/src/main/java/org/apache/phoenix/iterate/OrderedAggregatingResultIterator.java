@@ -36,10 +36,9 @@ import org.apache.phoenix.schema.tuple.Tuple;
 public class OrderedAggregatingResultIterator extends OrderedResultIterator implements AggregatingResultIterator {
 
     public OrderedAggregatingResultIterator(AggregatingResultIterator delegate,
-            List<OrderByExpression> orderByExpressions, boolean spoolingEnabled, long thresholdBytes,
-            Integer limit, Integer offset)
+            List<OrderByExpression> orderByExpressions, int thresholdBytes, Integer limit, Integer offset)
                     throws SQLException {
-        super(delegate, orderByExpressions, spoolingEnabled, thresholdBytes, limit, offset);
+        super(delegate, orderByExpressions, thresholdBytes, limit, offset);
     }
 
     @Override

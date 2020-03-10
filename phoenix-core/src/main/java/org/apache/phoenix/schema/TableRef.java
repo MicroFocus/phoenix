@@ -17,8 +17,6 @@
  */
 package org.apache.phoenix.schema;
 
-import java.sql.SQLException;
-import java.util.Collections;
 import java.util.Objects;
 
 import org.apache.phoenix.compile.TupleProjectionCompiler;
@@ -30,7 +28,7 @@ import org.apache.phoenix.util.SchemaUtil;
 
 
 public class TableRef {
-    public static final TableRef EMPTY_TABLE_REF = createEmptyTableRef();
+    public static final TableRef EMPTY_TABLE_REF = new TableRef(new PTableImpl());
     
     private PTable table;
     private long upperBoundTimeStamp;
@@ -38,19 +36,6 @@ public class TableRef {
     private final long lowerBoundTimeStamp;
     private final boolean hasDynamicCols;
     private final long currentTime;
-
-    private static TableRef createEmptyTableRef() {
-        try {
-            return new TableRef(new PTableImpl.Builder()
-                    .setIndexes(Collections.emptyList())
-                    .setPhysicalNames(Collections.emptyList())
-                    .setRowKeySchema(RowKeySchema.EMPTY_SCHEMA)
-                    .build());
-        } catch (SQLException e) {
-            // Should never happen
-            return null;
-        }
-    }
 
     public TableRef(TableRef tableRef) {
         this(tableRef.alias, tableRef.table, tableRef.upperBoundTimeStamp, tableRef.lowerBoundTimeStamp, tableRef.hasDynamicCols);
@@ -80,9 +65,9 @@ public class TableRef {
         boolean hasDynamicCols) {
         this.alias = alias;
         this.table = table;
-        this.currentTime = upperBoundTimeStamp;
         // if UPDATE_CACHE_FREQUENCY is set, always let the server set timestamps
         this.upperBoundTimeStamp = table.getUpdateCacheFrequency()!=0 ? QueryConstants.UNSET_TIMESTAMP : upperBoundTimeStamp;
+        this.currentTime = this.upperBoundTimeStamp;
         this.lowerBoundTimeStamp = lowerBoundTimeStamp;
         this.hasDynamicCols = hasDynamicCols;
     }

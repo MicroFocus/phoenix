@@ -209,11 +209,13 @@ public class PhoenixConnection implements Connection, MetaDataMutated, SQLClosea
 
     public PhoenixConnection(PhoenixConnection connection, long scn)
             throws SQLException {
-        this(connection, newPropsWithSCN(scn, connection.getClientInfo()));
+        this(connection.getQueryServices(), connection, scn);
     }
 
-	public PhoenixConnection(PhoenixConnection connection, Properties props) throws SQLException {
-        this(connection.getQueryServices(), connection.getURL(), props, connection.metaData, connection
+    public PhoenixConnection(ConnectionQueryServices services,
+            PhoenixConnection connection, long scn) throws SQLException {
+        this(services, connection.getURL(), newPropsWithSCN(scn,
+                connection.getClientInfo()), connection.metaData, connection
                 .getMutationState(), connection.isDescVarLengthRowKeyUpgrade(),
                 connection.isRunningUpgrade(), connection.buildingIndex);
         this.isAutoCommit = connection.isAutoCommit;
@@ -244,11 +246,8 @@ public class PhoenixConnection implements Connection, MetaDataMutated, SQLClosea
         this.isDescVarLengthRowKeyUpgrade = isDescVarLengthRowKeyUpgrade;
 
         // Filter user provided properties based on property policy, if
-        // provided and QueryServices.PROPERTY_POLICY_PROVIDER_ENABLED is true
-        if (Boolean.valueOf(info.getProperty(QueryServices.PROPERTY_POLICY_PROVIDER_ENABLED,
-                String.valueOf(QueryServicesOptions.DEFAULT_PROPERTY_POLICY_PROVIDER_ENABLED)))) {
-            PropertyPolicyProvider.getPropertyPolicy().evaluate(info);
-        }
+        // provided.
+        PropertyPolicyProvider.getPropertyPolicy().evaluate(info);
 
         // Copy so client cannot change
         this.info = info == null ? new Properties() : PropertiesUtil

@@ -17,7 +17,6 @@
  */
 package org.apache.phoenix.compile;
 
-import static org.apache.phoenix.query.QueryConstants.BASE_TABLE_BASE_COLUMN_COUNT;
 import static org.apache.phoenix.schema.PTable.ImmutableStorageScheme.ONE_CELL_PER_COLUMN;
 import static org.apache.phoenix.schema.PTable.QualifierEncodingScheme.NON_ENCODED_QUALIFIERS;
 
@@ -33,7 +32,6 @@ import java.util.ListIterator;
 import java.util.Map;
 import java.util.Set;
 
-import com.google.common.collect.ImmutableList;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.phoenix.exception.SQLExceptionCode;
@@ -73,6 +71,7 @@ import org.apache.phoenix.schema.ColumnRef;
 import org.apache.phoenix.schema.LocalIndexDataColumnRef;
 import org.apache.phoenix.schema.MetaDataEntityNotFoundException;
 import org.apache.phoenix.schema.PColumn;
+import org.apache.phoenix.schema.PName;
 import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
@@ -358,8 +357,11 @@ public class JoinCompiler {
             }
         }
 
-        public Expression compilePostFilterExpression(StatementContext context) throws SQLException {
+        public Expression compilePostFilterExpression(StatementContext context, Table table) throws SQLException {
             List<ParseNode> filtersCombined = Lists.<ParseNode> newArrayList(postFilters);
+            if (table != null) {
+                filtersCombined.addAll(table.getPostFilters());
+            }
             return JoinCompiler.compilePostFilterExpression(context, filtersCombined);
         }
 
@@ -752,16 +754,18 @@ public class JoinCompiler {
             return combine(preFilters);
         }
 
+        public Expression compilePostFilterExpression(StatementContext context) throws SQLException {
+            return JoinCompiler.compilePostFilterExpression(context, postFilters);
+        }
+
         public SelectStatement getAsSubquery(List<OrderByNode> orderBy) throws SQLException {
-            if (isSubselect()) {
-                return SubselectRewriter.applyOrderByAndPostFilters(
-                        SubselectRewriter.applyPreFiltersForSubselect(subselect, preFilters, tableNode.getAlias()),
+            if (isSubselect())
+                return SubselectRewriter.applyOrderBy(
+                        SubselectRewriter.applyPostFilters(subselect, preFilters, tableNode.getAlias()),
                         orderBy,
                         tableNode.getAlias(),
-                        postFilters);
-            }
-            //for table, postFilters is empty , because it can safely pushed down as preFilters.
-            assert postFilters == null || postFilters.isEmpty();
+                        tableNode);
+
             return NODE_FACTORY.select(tableNode, select.getHint(), false, getSelectNodes(), getPreFiltersCombined(), null,
                     null, orderBy, null, null, 0, false, select.hasSequence(),
                     Collections.<SelectStatement> emptyList(), select.getUdfParseNodes());
@@ -1266,44 +1270,17 @@ public class JoinCompiler {
         if (left.getBucketNum() != null) {
             merged.remove(0);
         }
-        return new PTableImpl.Builder()
-                .setType(left.getType())
-                .setState(left.getIndexState())
-                .setTimeStamp(left.getTimeStamp())
-                .setIndexDisableTimestamp(left.getIndexDisableTimestamp())
-                .setSequenceNumber(left.getSequenceNumber())
-                .setImmutableRows(left.isImmutableRows())
-                .setDisableWAL(PTable.DEFAULT_DISABLE_WAL)
-                .setMultiTenant(left.isMultiTenant())
-                .setStoreNulls(left.getStoreNulls())
-                .setViewType(left.getViewType())
-                .setViewIndexIdType(left.getviewIndexIdType())
-                .setViewIndexId(left.getViewIndexId())
-                .setIndexType(left.getIndexType())
-                .setTransactionProvider(left.getTransactionProvider())
-                .setUpdateCacheFrequency(left.getUpdateCacheFrequency())
-                .setNamespaceMapped(left.isNamespaceMapped())
-                .setAutoPartitionSeqName(left.getAutoPartitionSeqName())
-                .setAppendOnlySchema(left.isAppendOnlySchema())
-                .setImmutableStorageScheme(ONE_CELL_PER_COLUMN)
-                .setQualifierEncodingScheme(NON_ENCODED_QUALIFIERS)
-                .setBaseColumnCount(BASE_TABLE_BASE_COLUMN_COUNT)
-                .setEncodedCQCounter(PTable.EncodedCQCounter.NULL_COUNTER)
-                .setUseStatsForParallelization(left.useStatsForParallelization())
-                .setExcludedColumns(ImmutableList.of())
-                .setTenantId(left.getTenantId())
-                .setSchemaName(left.getSchemaName())
-                .setTableName(PNameFactory.newName(SchemaUtil.getTableName(left.getName().getString(),
-                        right.getName().getString())))
-                .setPkName(left.getPKName())
-                .setRowKeyOrderOptimizable(left.rowKeyOrderOptimizable())
-                .setBucketNum(left.getBucketNum())
-                .setIndexes(left.getIndexes() == null ? Collections.emptyList() : left.getIndexes())
-                .setParentSchemaName(left.getParentSchemaName())
-                .setParentTableName(left.getParentTableName())
-                .setPhysicalNames(ImmutableList.of())
-                .setColumns(merged)
-                .build();
+        return PTableImpl.makePTable(left.getTenantId(), left.getSchemaName(),
+                PNameFactory.newName(SchemaUtil.getTableName(left.getName().getString(), right.getName().getString())),
+                left.getType(), left.getIndexState(), left.getTimeStamp(), left.getSequenceNumber(), left.getPKName(),
+                left.getBucketNum(), merged, left.getParentSchemaName(), left.getParentTableName(), left.getIndexes(),
+                left.isImmutableRows(), Collections.<PName> emptyList(), null, null, PTable.DEFAULT_DISABLE_WAL,
+                left.isMultiTenant(), left.getStoreNulls(), left.getViewType(), left.getViewIndexType(), left.getViewIndexId(),
+                left.getIndexType(), left.rowKeyOrderOptimizable(), left.getTransactionProvider(),
+                left.getUpdateCacheFrequency(), left.getIndexDisableTimestamp(), left.isNamespaceMapped(), 
+                left.getAutoPartitionSeqName(), left.isAppendOnlySchema(), ONE_CELL_PER_COLUMN, NON_ENCODED_QUALIFIERS, PTable.EncodedCQCounter.NULL_COUNTER, left.useStatsForParallelization());
     }
 
 }
+
+

@@ -64,9 +64,9 @@ public class EncodedColumnsUtil {
         }
     }
     
-    public static boolean useNewValueColumnQualifier(Scan s) {
+    public static final boolean useNewValueColumnQualifier(Scan s) {
         // null check for backward compatibility
-        return s.getAttribute(BaseScannerRegionObserver.USE_NEW_VALUE_COLUMN_QUALIFIER) != null;
+        return s.getAttribute(BaseScannerRegionObserver.USE_NEW_VALUE_COLUMN_QUALIFIER) == null ? false : true;
     }
     
     public static QualifierEncodingScheme getQualifierEncodingScheme(Scan s) {

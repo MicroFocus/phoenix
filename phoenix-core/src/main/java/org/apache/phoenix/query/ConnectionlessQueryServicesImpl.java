@@ -18,7 +18,6 @@
 package org.apache.phoenix.query;
 
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.INDEX_STATE_BYTES;
-import static org.apache.phoenix.schema.PTableImpl.getColumnsToClone;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -178,18 +177,6 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
         return String.format(ddl, props.getInt(LOG_SALT_BUCKETS_ATTRIB, QueryServicesOptions.DEFAULT_LOG_SALT_BUCKETS));
 
     }
-    
-    protected String getChildLinkDDL() {
-        return setSystemDDLProperties(QueryConstants.CREATE_CHILD_LINK_METADATA);
-    }
-    
-    protected String getMutexDDL() {
-        return setSystemDDLProperties(QueryConstants.CREATE_MUTEX_METADTA);
-    }
-
-    protected String getTaskDDL() {
-        return setSystemDDLProperties(QueryConstants.CREATE_TASK_METADATA);
-    }
 
     private String setSystemDDLProperties(String ddl) {
         return String.format(ddl,
@@ -249,7 +236,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     }
 
     @Override
-    public MetaDataMutationResult getTable(PName tenantId, byte[] schemaBytes, byte[] tableBytes, long tableTimestamp, long clientTimestamp, boolean skipAddingIndexes, boolean skipCombiningColumns, PTable ancestorTable) throws SQLException {
+    public MetaDataMutationResult getTable(PName tenantId, byte[] schemaBytes, byte[] tableBytes, long tableTimestamp, long clientTimestamp) throws SQLException {
         // Return result that will cause client to use it's own metadata instead of needing
         // to get anything from the server (since we don't have a connection)
         try {
@@ -310,7 +297,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     }
 
     @Override
-    public MetaDataMutationResult dropTable(List<Mutation> tableMetadata, PTableType tableType, boolean cascade, boolean skipAddingParentColumns) throws SQLException {
+    public MetaDataMutationResult dropTable(List<Mutation> tableMetadata, PTableType tableType, boolean cascade) throws SQLException {
         byte[] tableName = getTableName(tableMetadata, null);
         tableSplits.remove(Bytes.toString(tableName));
         return new MetaDataMutationResult(MutationCode.TABLE_ALREADY_EXISTS, 0, null);
@@ -320,8 +307,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     public MetaDataMutationResult addColumn(List<Mutation> tableMetaData, PTable table, Map<String, List<Pair<String,Object>>> properties, Set<String> colFamiliesForPColumnsToBeAdded, List<PColumn> columnsToBeAdded) throws SQLException {
         List<PColumn> columns = Lists.newArrayList(table.getColumns());
         columns.addAll(columnsToBeAdded);
-        return new MetaDataMutationResult(MutationCode.TABLE_ALREADY_EXISTS, 0,
-                PTableImpl.builderWithColumns(table, columns).build());
+        return new MetaDataMutationResult(MutationCode.TABLE_ALREADY_EXISTS, 0, PTableImpl.makePTable(table, columns));
     }
 
     @Override
@@ -387,21 +373,6 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
                 try {
                     metaConnection.createStatement().executeUpdate(getLogTableDDL());
                 } catch (NewerTableAlreadyExistsException ignore) {}
-                try {
-                    metaConnection.createStatement()
-                            .executeUpdate(getChildLinkDDL());
-                } catch (NewerTableAlreadyExistsException ignore) {
-                }
-                try {
-                    metaConnection.createStatement()
-                            .executeUpdate(getMutexDDL());
-                } catch (NewerTableAlreadyExistsException ignore) {
-                }
-                try {
-                    metaConnection.createStatement()
-                            .executeUpdate(getTaskDDL());
-                } catch (NewerTableAlreadyExistsException ignore) {
-                }
             } catch (SQLException e) {
                 sqlE = e;
             } finally {
@@ -458,10 +429,7 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
         String indexTableName = SchemaUtil.getTableName(schemaName, indexName);
         PName tenantId = tenantIdBytes.length == 0 ? null : PNameFactory.newName(tenantIdBytes);
         PTable index = metaData.getTableRef(new PTableKey(tenantId, indexTableName)).getTable();
-        index = PTableImpl.builderWithColumns(index, getColumnsToClone(index))
-                .setState(newState == PIndexState.USABLE ? PIndexState.ACTIVE :
-                        newState == PIndexState.UNUSABLE ? PIndexState.INACTIVE : newState)
-                .build();
+        index = PTableImpl.makePTable(index,newState == PIndexState.USABLE ? PIndexState.ACTIVE : newState == PIndexState.UNUSABLE ? PIndexState.INACTIVE : newState);
         return new MetaDataMutationResult(MutationCode.TABLE_ALREADY_EXISTS, 0, index);
     }
 
@@ -755,16 +723,5 @@ public class ConnectionlessQueryServicesImpl extends DelegateQueryServices imple
     @Override
     public PhoenixTransactionClient initTransactionClient(Provider provider) {
         return null; // Client is not necessary
-    }
-
-    @Override
-    public boolean writeMutexCell(String tenantId, String schemaName, String tableName,
-            String columnName, String familyName) throws SQLException {
-        return true;
-    }
-
-    @Override
-    public void deleteMutexCell(String tenantId, String schemaName, String tableName,
-            String columnName, String familyName) throws SQLException {
     }
 }

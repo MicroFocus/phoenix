@@ -19,7 +19,6 @@ package org.apache.phoenix.compile;
 
 
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -28,9 +27,9 @@ import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
 import org.apache.phoenix.compile.OrderPreservingTracker.Ordering;
 import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.exception.SQLExceptionInfo;
+import org.apache.phoenix.execute.TupleProjector;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.expression.OrderByExpression;
-import org.apache.phoenix.iterate.OrderedResultIterator;
 import org.apache.phoenix.parse.HintNode.Hint;
 import org.apache.phoenix.parse.LiteralParseNode;
 import org.apache.phoenix.parse.OrderByNode;
@@ -38,7 +37,9 @@ import org.apache.phoenix.parse.ParseNode;
 import org.apache.phoenix.parse.SelectStatement;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PTableType;
+import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.schema.types.PInteger;
 
 import com.google.common.collect.ImmutableList;
@@ -63,45 +64,12 @@ public class OrderByCompiler {
         
         private final List<OrderByExpression> orderByExpressions;
         
-        public OrderBy(List<OrderByExpression> orderByExpressions) {
+        private OrderBy(List<OrderByExpression> orderByExpressions) {
             this.orderByExpressions = ImmutableList.copyOf(orderByExpressions);
         }
 
         public List<OrderByExpression> getOrderByExpressions() {
             return orderByExpressions;
-        }
-
-        public boolean isEmpty() {
-            return this.orderByExpressions == null || this.orderByExpressions.isEmpty();
-        }
-
-        public static List<OrderBy> wrapForOutputOrderBys(OrderBy orderBy) {
-            assert orderBy != OrderBy.FWD_ROW_KEY_ORDER_BY && orderBy != OrderBy.REV_ROW_KEY_ORDER_BY;
-            if(orderBy == null || orderBy == OrderBy.EMPTY_ORDER_BY) {
-                return Collections.<OrderBy> emptyList();
-            }
-            return Collections.<OrderBy> singletonList(orderBy);
-        }
-
-        /**
-         * When we compile {@link OrderByNode} in {@link OrderByCompiler#compile}, we invoke {@link OrderByExpression#createByCheckIfExpressionSortOrderDesc}
-         * to get the compiled {@link OrderByExpression} for using it in {@link OrderedResultIterator}, but for {@link QueryPlan#getOutputOrderBys()},
-         * the returned {@link OrderByExpression} is used for {@link OrderPreservingTracker}, so we should invoke {@link OrderByExpression#createByCheckIfExpressionSortOrderDesc}
-         * again to the actual {@link OrderByExpression}.
-         * @return
-         */
-        public static OrderBy convertCompiledOrderByToOutputOrderBy(OrderBy orderBy) {
-            if(orderBy.isEmpty()) {
-                return orderBy;
-            }
-            List<OrderByExpression> orderByExpressions = orderBy.getOrderByExpressions();
-            List<OrderByExpression> newOrderByExpressions = new ArrayList<OrderByExpression>(orderByExpressions.size());
-            for(OrderByExpression orderByExpression : orderByExpressions) {
-                OrderByExpression newOrderByExpression =
-                        OrderByExpression.convertIfExpressionSortOrderDesc(orderByExpression);
-                newOrderByExpressions.add(newOrderByExpression);
-            }
-            return new OrderBy(newOrderByExpressions);
         }
     }
     /**
@@ -116,12 +84,11 @@ public class OrderByCompiler {
      */
     public static OrderBy compile(StatementContext context,
                                   SelectStatement statement,
-                                  GroupBy groupBy,
-                                  Integer limit,
+                                  GroupBy groupBy, Integer limit,
                                   Integer offset,
                                   RowProjector rowProjector,
-                                  QueryPlan innerQueryPlan,
-                                  Expression whereExpression) throws SQLException {
+                                  TupleProjector tupleProjector,
+                                  boolean isInRowKeyOrder) throws SQLException {
         List<OrderByNode> orderByNodes = statement.getOrderBy();
         if (orderByNodes.isEmpty()) {
             return OrderBy.EMPTY_ORDER_BY;
@@ -129,23 +96,18 @@ public class OrderByCompiler {
         // for ungroupedAggregates as GROUP BY expression, check against an empty group by
         ExpressionCompiler compiler;
         if (groupBy.isUngroupedAggregate()) {
-            compiler = new StatelessExpressionCompiler(context, GroupBy.EMPTY_GROUP_BY);
+            compiler = new ExpressionCompiler(context, GroupBy.EMPTY_GROUP_BY) {
+                @Override
+                protected Expression addExpression(Expression expression) {return expression;}
+                @Override
+                protected void addColumn(PColumn column) {}
+            };
         } else {
             compiler = new ExpressionCompiler(context, groupBy);
         }
-        OrderPreservingTracker tracker = null;
-        if(isTrackOrderByPreserving(statement)) {
-            // accumulate columns in ORDER BY
-            tracker = new OrderPreservingTracker(
-                            context,
-                            groupBy,
-                            Ordering.ORDERED,
-                            orderByNodes.size(),
-                            null,
-                            innerQueryPlan,
-                            whereExpression);
-        }
-
+        // accumulate columns in ORDER BY
+        OrderPreservingTracker tracker = 
+                new OrderPreservingTracker(context, groupBy, Ordering.ORDERED, orderByNodes.size(), tupleProjector);
         LinkedHashSet<OrderByExpression> orderByExpressions = Sets.newLinkedHashSetWithExpectedSize(orderByNodes.size());
         for (OrderByNode node : orderByNodes) {
             ParseNode parseNode = node.getNode();
@@ -175,19 +137,13 @@ public class OrderByCompiler {
             if (!expression.isStateless()) {
                 boolean isAscending = node.isAscending();
                 boolean isNullsLast = node.isNullsLast();
-                if(tracker != null) {
-                    tracker.track(expression, isAscending, isNullsLast);
+                tracker.track(expression, isAscending ? SortOrder.ASC : SortOrder.DESC, isNullsLast);
+                // If we have a schema where column A is DESC, reverse the sort order and nulls last
+                // since this is the order they actually are in.
+                if (expression.getSortOrder() == SortOrder.DESC) {
+                    isAscending = !isAscending;
                 }
-                /**
-                 * If we have a schema where column A is DESC, reverse the sort order
-                 * since this is the order they actually are in.
-                 * Reverse is required because the compiled OrderByExpression is used in {@link OrderedResultIterator},
-                 * {@link OrderedResultIterator} implements the compare based on binary representation, not the decoded value of corresponding dataType.
-                 */
-                OrderByExpression orderByExpression = OrderByExpression.createByCheckIfExpressionSortOrderDesc(
-                        expression,
-                        isNullsLast,
-                        isAscending);
+                OrderByExpression orderByExpression = new OrderByExpression(expression, isNullsLast, isAscending);
                 orderByExpressions.add(orderByExpression);
             }
             compiler.reset();
@@ -197,7 +153,7 @@ public class OrderByCompiler {
             return OrderBy.EMPTY_ORDER_BY;
         }
         // If we're ordering by the order returned by the scan, we don't need an order by
-        if (tracker != null && tracker.isOrderPreserving()) {
+        if (isInRowKeyOrder && tracker.isOrderPreserving()) {
             if (tracker.isReverse()) {
                 // Don't use reverse scan if:
                 // 1) we're using a skip scan, as our skip scan doesn't support this yet.
@@ -217,10 +173,6 @@ public class OrderByCompiler {
         }
 
         return new OrderBy(Lists.newArrayList(orderByExpressions.iterator()));
-    }
-
-    public static boolean isTrackOrderByPreserving(SelectStatement selectStatement) {
-        return !selectStatement.isUnion();
     }
 
     private OrderByCompiler() {

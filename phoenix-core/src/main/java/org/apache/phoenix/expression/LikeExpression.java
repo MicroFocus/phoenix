@@ -147,7 +147,7 @@ public abstract class LikeExpression extends BaseCompoundExpression {
         }
     }
 
-    public static String toPattern(String s) {
+    private static String toPattern(String s) {
         StringBuilder sb = new StringBuilder(s.length());
 
         // From the JDK doc: \Q and \E protect everything between them

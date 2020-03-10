@@ -27,7 +27,7 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>5.0.0-cdh6.1.1</version>
+    <version>5.0.0.7.0.3.0-79</version>
   </parent>
   <artifactId>phoenix-assembly</artifactId>
   <name>Phoenix Assembly</name>
@@ -42,28 +42,6 @@
 
   <build>
     <plugins>
-      <plugin>
-        <artifactId>exec-maven-plugin</artifactId>
-        <groupId>org.codehaus.mojo</groupId>
-        <executions>
-          <execution>
-            <id>Symlink to deprecated client jar name</id>
-            <phase>compile</phase>
-            <goals>
-              <goal>exec</goal>
-            </goals>
-            <configuration>
-              <executable>ln</executable>
-              <workingDirectory>${project.basedir}/../phoenix-client/target</workingDirectory>
-              <arguments>
-                <argument>-fnsv</argument>
-                <argument>phoenix-client-${project.version}.jar</argument>
-                <argument>phoenix-${project.version}-client.jar</argument>
-              </arguments>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
       <!-- No jars created for this module -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -124,59 +102,31 @@
       <groupId>org.apache.phoenix</groupId>
       <artifactId>phoenix-core</artifactId>
     </dependency>
+    <!-- We do not build or ship phoenix-flume or phoenix-kafka
     <dependency>
-      <groupId>org.apache.omid</groupId>
-      <artifactId>omid-hbase-tools-hbase2.x</artifactId>
-      <version>${omid.version}</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-flume</artifactId>
     </dependency>
-
     <dependency>
-      <groupId>com.fasterxml.woodstox</groupId>
-      <artifactId>woodstox-core</artifactId>
-      <version>5.2.0</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-kafka</artifactId>
     </dependency>
-
+    -->
     <dependency>
-      <groupId>org.codehaus.woodstox</groupId>
-      <artifactId>stax2-api</artifactId>
-      <version>3.0.1</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-pig</artifactId>
     </dependency>
-
     <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-configuration2</artifactId>
-      <version>2.0</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-spark</artifactId>
     </dependency>
-
     <dependency>
-      <groupId>org.apache.hbase.thirdparty</groupId>
-      <artifactId>hbase-shaded-miscellaneous</artifactId>
-      <version>2.1.0</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-queryserver</artifactId>
     </dependency>
-
     <dependency>
-      <groupId>org.apache.hbase.thirdparty</groupId>
-      <artifactId>hbase-shaded-protobuf</artifactId>
-      <version>2.1.0</version>
+      <groupId>org.apache.phoenix</groupId>
+      <artifactId>phoenix-queryserver-client</artifactId>
     </dependency>
-
-    <dependency>
-      <groupId>org.apache.hbase.thirdparty</groupId>
-      <artifactId>hbase-shaded-netty</artifactId>
-      <version>2.1.0</version>
-    </dependency>
-
-    <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-lang3</artifactId>
-      <version>3.0</version>
-    </dependency>
-
-    <dependency>
-      <groupId>org.apache.htrace</groupId>
-      <artifactId>htrace-core</artifactId>
-      <version>4.0.0-incubating</version>
-    </dependency>
-
   </dependencies>
 </project>

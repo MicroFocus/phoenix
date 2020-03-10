@@ -22,10 +22,9 @@ import static org.apache.phoenix.util.LogUtil.addCustomAnnotations;
 
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,7 +41,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.commons.codec.binary.Hex;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.client.Table;
@@ -52,7 +50,6 @@ import org.apache.hadoop.hbase.ipc.CoprocessorRpcUtils.BlockingRpcCallback;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.ScanRanges;
 import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.coprocessor.ServerCachingProtocol.ServerCacheFactory;
@@ -62,7 +59,6 @@ import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.AddServerCac
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheRequest;
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheResponse;
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.ServerCachingService;
-import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.job.JobManager.JobCallable;
 import org.apache.phoenix.join.HashCacheFactory;
@@ -78,8 +74,6 @@ import org.apache.phoenix.util.Closeables;
 import org.apache.phoenix.util.SQLCloseable;
 import org.apache.phoenix.util.SQLCloseables;
 import org.apache.phoenix.util.ScanUtil;
-
-import com.google.protobuf.ByteString;
 
 /**
  * 
@@ -149,7 +143,7 @@ public class ServerCacheClient {
                 } catch (InsufficientMemoryException e) {
                     this.outputFile = File.createTempFile("HashJoinCacheSpooler", ".bin", new File(services.getProps()
                             .get(QueryServices.SPOOL_DIRECTORY, QueryServicesOptions.DEFAULT_SPOOL_DIRECTORY)));
-                    try (OutputStream fio = Files.newOutputStream(outputFile.toPath())) {
+                    try (FileOutputStream fio = new FileOutputStream(outputFile)) {
                         fio.write(cachePtr.get(), cachePtr.getOffset(), cachePtr.getLength());
                     }
                 }
@@ -159,7 +153,7 @@ public class ServerCacheClient {
 
         public ImmutableBytesWritable getCachePtr() throws IOException {
             if(this.outputFile!=null){
-                try (InputStream fio = Files.newInputStream(outputFile.toPath())) {
+                try (FileInputStream fio = new FileInputStream(outputFile)) {
                     byte[] b = new byte[this.size];
                     fio.read(b);
                     cachePtr = new ImmutableBytesWritable(b);
@@ -221,46 +215,22 @@ public class ServerCacheClient {
                 }
             }
         }
+        
     }
-
-    public ServerCache createServerCache(byte[] cacheId, QueryPlan delegate)
-            throws SQLException, IOException {
-        PTable cacheUsingTable = delegate.getTableRef().getTable();
-        ConnectionQueryServices services = delegate.getContext().getConnection().getQueryServices();
-        List<HRegionLocation> locations = services.getAllTableRegions(
-                cacheUsingTable.getPhysicalName().getBytes());
-        int nRegions = locations.size();
-        Set<HRegionLocation> servers = new HashSet<>(nRegions);
-        cacheUsingTableMap.put(Bytes.mapKey(cacheId), cacheUsingTable);
-        return new ServerCache(cacheId, servers, new ImmutableBytesWritable(
-                new byte[]{}), services, false);
-    }
-
-    public ServerCache addServerCache(
-            ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState,
-            final ServerCacheFactory cacheFactory, final PTable cacheUsingTable)
-            throws SQLException {
+    
+    public ServerCache addServerCache(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState,
+            final ServerCacheFactory cacheFactory, final PTable cacheUsingTable) throws SQLException {
         return addServerCache(keyRanges, cachePtr, txState, cacheFactory, cacheUsingTable, false);
     }
-
-    public ServerCache addServerCache(
-            ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState,
-            final ServerCacheFactory cacheFactory, final PTable cacheUsingTable,
-            boolean storeCacheOnClient) throws SQLException {
-        final byte[] cacheId = ServerCacheClient.generateId();
-        return addServerCache(keyRanges, cacheId, cachePtr, txState, cacheFactory,
-                cacheUsingTable, false, storeCacheOnClient);
-    }
-
-    public ServerCache addServerCache(
-            ScanRanges keyRanges, final byte[] cacheId, final ImmutableBytesWritable cachePtr,
-            final byte[] txState, final ServerCacheFactory cacheFactory,
-            final PTable cacheUsingTable, final boolean usePersistentCache,
-            boolean storeCacheOnClient) throws SQLException {
+    
+    public ServerCache addServerCache(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState,
+            final ServerCacheFactory cacheFactory, final PTable cacheUsingTable, boolean storeCacheOnClient)
+            throws SQLException {
         ConnectionQueryServices services = connection.getQueryServices();
         List<Closeable> closeables = new ArrayList<Closeable>();
         ServerCache hashCacheSpec = null;
         SQLException firstException = null;
+        final byte[] cacheId = generateId();
         /**
          * Execute EndPoint in parallel on each server to send compressed hash cache 
          */
@@ -281,7 +251,7 @@ public class ServerCacheClient {
                 byte[] regionEndKey = entry.getRegion().getEndKey();
                 if ( ! servers.contains(entry) && 
                         keyRanges.intersectRegion(regionStartKey, regionEndKey,
-                                cacheUsingTable.getIndexType() == IndexType.LOCAL)) {
+                                cacheUsingTable.getIndexType() == IndexType.LOCAL)) {  
                     // Call RPC once per server
                     servers.add(entry);
                     if (LOG.isDebugEnabled()) {LOG.debug(addCustomAnnotations("Adding cache entry to be sent for " + entry, connection));}
@@ -292,7 +262,7 @@ public class ServerCacheClient {
                         
                         @Override
                         public Boolean call() throws Exception {
-                            return addServerCache(htable, key, cacheUsingTable, cacheId, cachePtr, cacheFactory, txState, usePersistentCache);
+                            return addServerCache(htable, key, cacheUsingTable, cacheId, cachePtr, cacheFactory, txState);
                         }
 
                         /**
@@ -321,7 +291,7 @@ public class ServerCacheClient {
             for (Future<Boolean> future : futures) {
                 future.get(timeoutMs, TimeUnit.MILLISECONDS);
             }
-
+            
             cacheUsingTableMap.put(Bytes.mapKey(cacheId), cacheUsingTable);
             success = true;
         } catch (SQLException e) {
@@ -474,7 +444,7 @@ public class ServerCacheClient {
             }
 			if (cache.addServer(tableRegionLocation) || services.getProps().getBoolean(HASH_JOIN_SERVER_CACHE_RESEND_PER_SERVER,false)) {
 				success = addServerCache(table, startkeyOfRegion, pTable, cacheId, cache.getCachePtr(), cacheFactory,
-						txState, false);
+						txState);
 			}
 			return success;
         } finally {
@@ -483,41 +453,10 @@ public class ServerCacheClient {
     }
     
     public boolean addServerCache(Table htable, byte[] key, final PTable cacheUsingTable, final byte[] cacheId,
-            final ImmutableBytesWritable cachePtr, final ServerCacheFactory cacheFactory, final byte[] txState, final boolean usePersistentCache)
+            final ImmutableBytesWritable cachePtr, final ServerCacheFactory cacheFactory, final byte[] txState)
             throws Exception {
         byte[] keyInRegion = getKeyInRegion(key);
         final Map<byte[], AddServerCacheResponse> results;
-
-        AddServerCacheRequest.Builder builder = AddServerCacheRequest.newBuilder();
-        final byte[] tenantIdBytes;
-        if (cacheUsingTable.isMultiTenant()) {
-            try {
-                tenantIdBytes = connection.getTenantId() == null ? null
-                        : ScanUtil.getTenantIdBytes(cacheUsingTable.getRowKeySchema(),
-                        cacheUsingTable.getBucketNum() != null, connection.getTenantId(),
-                        cacheUsingTable.getViewIndexId() != null);
-            } catch (SQLException e) {
-                throw new IOException(e);
-            }
-        } else {
-            tenantIdBytes = connection.getTenantId() == null ? null
-                    : connection.getTenantId().getBytes();
-        }
-        if (tenantIdBytes != null) {
-            builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
-        }
-        builder.setCacheId(ByteStringer.wrap(cacheId));
-        builder.setUsePersistentCache(usePersistentCache);
-        builder.setCachePtr(org.apache.phoenix.protobuf.ProtobufUtil.toProto(cachePtr));
-        builder.setHasProtoBufIndexMaintainer(true);
-        ServerCacheFactoryProtos.ServerCacheFactory.Builder svrCacheFactoryBuider = ServerCacheFactoryProtos.ServerCacheFactory
-                .newBuilder();
-        svrCacheFactoryBuider.setClassName(cacheFactory.getClass().getName());
-        builder.setCacheFactory(svrCacheFactoryBuider.build());
-        builder.setTxState(ByteStringer.wrap(txState));
-        builder.setClientVersion(MetaDataProtocol.PHOENIX_VERSION);
-        final AddServerCacheRequest request = builder.build();
-
         try {
             results = htable.coprocessorService(ServerCachingService.class, keyInRegion, keyInRegion,
                     new Batch.Call<ServerCachingService, AddServerCacheResponse>() {
@@ -525,7 +464,34 @@ public class ServerCacheClient {
                         public AddServerCacheResponse call(ServerCachingService instance) throws IOException {
                             ServerRpcController controller = new ServerRpcController();
                             BlockingRpcCallback<AddServerCacheResponse> rpcCallback = new BlockingRpcCallback<AddServerCacheResponse>();
-                            instance.addServerCache(controller, request, rpcCallback);
+                            AddServerCacheRequest.Builder builder = AddServerCacheRequest.newBuilder();
+                            final byte[] tenantIdBytes;
+                            if (cacheUsingTable.isMultiTenant()) {
+                                try {
+                                    tenantIdBytes = connection.getTenantId() == null ? null
+                                            : ScanUtil.getTenantIdBytes(cacheUsingTable.getRowKeySchema(),
+                                                    cacheUsingTable.getBucketNum() != null, connection.getTenantId(),
+                                                    cacheUsingTable.getViewIndexId() != null);
+                                } catch (SQLException e) {
+                                    throw new IOException(e);
+                                }
+                            } else {
+                                tenantIdBytes = connection.getTenantId() == null ? null
+                                        : connection.getTenantId().getBytes();
+                            }
+                            if (tenantIdBytes != null) {
+                                builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
+                            }
+                            builder.setCacheId(ByteStringer.wrap(cacheId));
+                            builder.setCachePtr(org.apache.phoenix.protobuf.ProtobufUtil.toProto(cachePtr));
+                            builder.setHasProtoBufIndexMaintainer(true);
+                            ServerCacheFactoryProtos.ServerCacheFactory.Builder svrCacheFactoryBuider = ServerCacheFactoryProtos.ServerCacheFactory
+                                    .newBuilder();
+                            svrCacheFactoryBuider.setClassName(cacheFactory.getClass().getName());
+                            builder.setCacheFactory(svrCacheFactoryBuider.build());
+                            builder.setTxState(ByteStringer.wrap(txState));
+                            builder.setClientVersion(MetaDataProtocol.PHOENIX_VERSION);
+                            instance.addServerCache(controller, builder.build(), rpcCallback);
                             if (controller.getFailedOn() != null) { throw controller.getFailedOn(); }
                             return rpcCallback.get();
                         }
@@ -535,6 +501,7 @@ public class ServerCacheClient {
         }
         if (results != null && results.size() == 1) { return results.values().iterator().next().getReturn(); }
         return false;
+
     }
     
 }

@@ -214,7 +214,7 @@ public abstract class BaseQueryPlan implements QueryPlan {
 
     @Override
     public final ResultIterator iterator(ParallelScanGrouper scanGrouper, Scan scan) throws SQLException {
-        return iterator(Collections.emptyMap(), scanGrouper, scan);
+        return iterator(Collections.<ImmutableBytesPtr,ServerCache>emptyMap(), scanGrouper, scan);
     }
         
 	private ResultIterator getWrappedIterator(final Map<ImmutableBytesPtr,ServerCache> dependencies,
@@ -367,12 +367,10 @@ public abstract class BaseQueryPlan implements QueryPlan {
         }
 
         // wrap the iterator so we start/end tracing as we expect
-        if (Tracing.isTracing()) {
-            TraceScope scope = Tracing.startNewSpan(context.getConnection(),
-                    "Creating basic query for " + getPlanSteps(iterator));
-            if (scope.getSpan() != null) return new TracingIterator(scope, iterator);
-        }
-        return iterator;
+        TraceScope scope =
+                Tracing.startNewSpan(context.getConnection(), "Creating basic query for "
+                        + getPlanSteps(iterator));
+        return (scope.getSpan() != null) ? new TracingIterator(scope, iterator) : iterator;
     }
 
     private void serializeIndexMaintainerIntoScan(Scan scan, PTable dataTable) throws SQLException {

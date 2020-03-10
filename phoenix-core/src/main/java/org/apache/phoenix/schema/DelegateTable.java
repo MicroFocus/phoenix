@@ -81,11 +81,6 @@ public class DelegateTable implements PTable {
     public List<PColumn> getColumns() {
         return delegate.getColumns();
     }
-    
-    @Override
-    public List<PColumn> getExcludedColumns() {
-        return delegate.getExcludedColumns();
-    }
 
     @Override
     public List<PColumnFamily> getColumnFamilies() {
@@ -218,8 +213,8 @@ public class DelegateTable implements PTable {
     }
 
     @Override
-    public PDataType getviewIndexIdType() {
-        return delegate.getviewIndexIdType();
+    public PDataType getViewIndexType() {
+        return delegate.getViewIndexType();
     }
 
     @Override
@@ -331,13 +326,5 @@ public class DelegateTable implements PTable {
     @Override
     public Boolean useStatsForParallelization() {
         return delegate.useStatsForParallelization();
-    }
-
-    @Override public boolean hasViewModifiedUpdateCacheFrequency() {
-        return delegate.hasViewModifiedUpdateCacheFrequency();
-    }
-
-    @Override public boolean hasViewModifiedUseStatsForParallelization() {
-        return delegate.hasViewModifiedUseStatsForParallelization();
     }
 }

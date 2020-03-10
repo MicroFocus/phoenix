@@ -162,9 +162,4 @@ public abstract class DelegateQueryPlan implements QueryPlan {
     public Long getEstimateInfoTimestamp() throws SQLException {
         return delegate.getEstimateInfoTimestamp();
     }
-
-    @Override
-    public List<OrderBy> getOutputOrderBys() {
-        return delegate.getOutputOrderBys();
-    }
 }

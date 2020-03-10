@@ -158,8 +158,7 @@ public class StatisticsScanner implements InternalScanner {
                     LOG.debug("Adding new stats for the region " + regionInfo.getRegionNameAsString()
                             + " as part of major compaction");
                 }
-                getStatisticsWriter().addStats(tracker, family,
-                        mutations, tracker.getGuidePostDepth());
+                getStatisticsWriter().addStats(tracker, family, mutations);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Committing new stats for the region " + regionInfo.getRegionNameAsString()
                             + " as part of major compaction");

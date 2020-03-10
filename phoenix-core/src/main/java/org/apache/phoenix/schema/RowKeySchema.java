@@ -21,9 +21,7 @@ import java.util.Collections;
 import java.util.List;
 
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
-import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.util.ByteUtil;
 import org.apache.phoenix.util.SchemaUtil;
 
 
@@ -356,85 +354,5 @@ public class RowKeySchema extends ValueSchema {
         int finalLength = ptr.getOffset() - initialOffset + ptr.getLength();
         ptr.set(ptr.get(), initialOffset, finalLength);
         return position + i - (Boolean.FALSE.equals(hasValue) ? 1 : 0);
-    }
-
-    public int computeMaxSpan(int pkPos, KeyRange result, ImmutableBytesWritable ptr) {
-        int maxOffset = iterator(result.getLowerRange(), ptr);
-        int lowerSpan = 0;
-        int i = pkPos;
-        while (this.next(ptr, i++, maxOffset) != null) {
-            lowerSpan++;
-        }
-        int upperSpan = 0;
-        i = pkPos;
-        maxOffset = iterator(result.getUpperRange(), ptr);
-        while (this.next(ptr, i++, maxOffset) != null) {
-            upperSpan++;
-        }
-        return Math.max(Math.max(lowerSpan, upperSpan), 1);
-    }
-
-    public int computeMinSpan(int pkPos, KeyRange keyRange, ImmutableBytesWritable ptr) {
-        if (keyRange == KeyRange.EVERYTHING_RANGE) {
-            return 0;
-        }
-        int lowerSpan = Integer.MAX_VALUE;
-        byte[] range = keyRange.getLowerRange();
-        if (range != KeyRange.UNBOUND) {
-            lowerSpan = 0;
-            int maxOffset = iterator(range, ptr);
-            int i = pkPos;
-            while (this.next(ptr, i++, maxOffset) != null) {
-                lowerSpan++;
-            }
-        }
-        int upperSpan = Integer.MAX_VALUE;
-        range = keyRange.getUpperRange();
-        if (range != KeyRange.UNBOUND) {
-            upperSpan = 0;
-            int maxOffset = iterator(range, ptr);
-            int i = pkPos;
-            while (this.next(ptr, i++, maxOffset) != null) {
-                upperSpan++;
-            }
-        }
-        return Math.min(lowerSpan, upperSpan);
-    }
-
-    /**
-     * Clip the left hand portion of the keyRange up to the spansToClip. If keyRange is shorter in
-     * spans than spansToClip, the portion of the range that exists will be returned.
-     * @param pkPos the leading pk position of the keyRange.
-     * @param keyRange the key range to clip
-     * @param spansToClip the number of spans to clip
-     * @param ptr an ImmutableBytesWritable to use for temporary storage.
-     * @return the clipped portion of the keyRange
-     */
-    public KeyRange clipLeft(int pkPos, KeyRange keyRange, int spansToClip, ImmutableBytesWritable ptr) {
-        if (spansToClip < 0) {
-            throw new IllegalArgumentException("Cannot specify a negative spansToClip (" + spansToClip + ")");
-        }
-        if (spansToClip == 0) {
-            return keyRange;
-        }
-        byte[] lowerRange = keyRange.getLowerRange();
-        if (lowerRange != KeyRange.UNBOUND) {
-            ptr.set(lowerRange);
-            this.position(ptr, pkPos, pkPos+spansToClip-1);
-            ptr.set(lowerRange, 0, ptr.getOffset() + ptr.getLength());
-            lowerRange = ByteUtil.copyKeyBytesIfNecessary(ptr);
-        }
-        byte[] upperRange = keyRange.getUpperRange();
-        if (upperRange != KeyRange.UNBOUND) {
-            ptr.set(upperRange);
-            this.position(ptr, pkPos, pkPos+spansToClip-1);
-            ptr.set(upperRange, 0, ptr.getOffset() + ptr.getLength());
-            upperRange = ByteUtil.copyKeyBytesIfNecessary(ptr);
-        }
-        //Have to update the bounds to inclusive
-        //Consider a partial key on pk columns (INT A, INT B, ....)  and a predicate (A,B) > (3,5)
-        //This initial key as a row key would look like  (x0305 - *]
-        //If we were to clip the left to (x03 - *], we would skip values like (3,6)
-        return KeyRange.getKeyRange(lowerRange, true, upperRange, true);
     }
 }

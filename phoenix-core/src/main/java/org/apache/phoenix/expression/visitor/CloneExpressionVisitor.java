@@ -51,7 +51,7 @@ import org.apache.phoenix.expression.function.ScalarFunction;
 import org.apache.phoenix.expression.function.SingleAggregateFunction;
 import org.apache.phoenix.expression.function.UDFExpression;
 
-public class CloneExpressionVisitor extends TraverseAllExpressionVisitor<Expression> {
+public abstract class CloneExpressionVisitor extends TraverseAllExpressionVisitor<Expression> {
 
     public CloneExpressionVisitor() {
     }
@@ -215,7 +215,5 @@ public class CloneExpressionVisitor extends TraverseAllExpressionVisitor<Express
         return isCloneNode(node, l) ? new ArrayElemRefExpression(l) : node;
     }
 
-    public boolean isCloneNode(Expression node, List<Expression> children) {
-        return node.isCloneExpression();
-    }
+    public abstract boolean isCloneNode(Expression node, List<Expression> children);
 }

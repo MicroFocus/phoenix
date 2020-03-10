@@ -16,17 +16,14 @@
  */
 package org.apache.phoenix.query;
 
-import static org.apache.phoenix.query.QueryServices.STATS_COLLECTION_ENABLED;
-import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_STATS_COLLECTION_ENABLED;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
@@ -42,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.cache.RemovalCause;
 import com.google.common.cache.RemovalListener;
@@ -60,25 +58,20 @@ public class GuidePostsCache {
 
     public GuidePostsCache(ConnectionQueryServices queryServices, Configuration config) {
         this.queryServices = Objects.requireNonNull(queryServices);
-
         // Number of millis to expire cache values after write
         final long statsUpdateFrequency = config.getLong(
                 QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB,
                 QueryServicesOptions.DEFAULT_STATS_UPDATE_FREQ_MS);
-
-        // Maximum total weight (size in bytes) of stats entries
+        // Maximum number of entries (tables) to store in the cache at one time
         final long maxTableStatsCacheSize = config.getLong(
                 QueryServices.STATS_MAX_CACHE_SIZE,
                 QueryServicesOptions.DEFAULT_STATS_MAX_CACHE_SIZE);
-
-		final boolean isStatsEnabled = config.getBoolean(STATS_COLLECTION_ENABLED, DEFAULT_STATS_COLLECTION_ENABLED);
-
-        PhoenixStatsCacheLoader cacheLoader = new PhoenixStatsCacheLoader(
-                isStatsEnabled ? new StatsLoaderImpl() : new EmptyStatsLoader(), config);
-
+		final boolean isStatsEnabled = config.getBoolean(QueryServices.STATS_COLLECTION_ENABLED,
+				QueryServicesOptions.DEFAULT_STATS_COLLECTION_ENABLED)
+				&& config.getBoolean(QueryServices.STATS_ENABLED_ATTRIB, true);
         cache = CacheBuilder.newBuilder()
-                // Refresh entries a given amount of time after they were written
-                .refreshAfterWrite(statsUpdateFrequency, TimeUnit.MILLISECONDS)
+                // Expire entries a given amount of time after they were written
+                .expireAfterWrite(statsUpdateFrequency, TimeUnit.MILLISECONDS)
                 // Maximum total weight (size in bytes) of stats entries
                 .maximumWeight(maxTableStatsCacheSize)
                 // Defer actual size to the PTableStats.getEstimatedSize()
@@ -89,38 +82,20 @@ public class GuidePostsCache {
                 })
                 // Log removals at TRACE for debugging
                 .removalListener(new PhoenixStatsCacheRemovalListener())
-                // Automatically load the cache when entries need to be refreshed
-                .build(cacheLoader);
+                // Automatically load the cache when entries are missing
+                .build(isStatsEnabled ? new StatsLoader() : new EmptyStatsLoader());
     }
 
     /**
-     * {@link PhoenixStatsLoader} implementation for the Stats Loader.
+     * {@link CacheLoader} implementation for the Phoenix Table Stats cache.
      */
-    protected class StatsLoaderImpl implements PhoenixStatsLoader {
+    protected class StatsLoader extends CacheLoader<GuidePostsKey, GuidePostsInfo> {
         @Override
-        public boolean needsLoad() {
-            // For now, whenever it's called, we try to load stats from stats table
-            // no matter it has been updated or not.
-            // Here are the possible optimizations we can do here:
-            // 1. Load stats from the stats table only when the stats get updated on the server side.
-            // 2. Support different refresh cycle for different tables.
-            return true;
-        }
-
-        @Override
-        public GuidePostsInfo loadStats(GuidePostsKey statsKey) throws Exception {
-            return loadStats(statsKey, GuidePostsInfo.NO_GUIDEPOST);
-        }
-
-        @Override
-        public GuidePostsInfo loadStats(GuidePostsKey statsKey, GuidePostsInfo prevGuidepostInfo) throws Exception {
-            assert(prevGuidepostInfo != null);
-
-            TableName tableName = SchemaUtil.getPhysicalName(
+        public GuidePostsInfo load(GuidePostsKey statsKey) throws Exception {
+            @SuppressWarnings("deprecation")
+            Table statsHTable = queryServices.getTable(SchemaUtil.getPhysicalName(
                     PhoenixDatabaseMetaData.SYSTEM_STATS_NAME_BYTES,
-                    queryServices.getProps());
-            Table statsHTable = queryServices.getTable(tableName.getName());
-
+                            queryServices.getProps()).getName());
             try {
                 GuidePostsInfo guidePostsInfo = StatisticsUtil.readStatistics(statsHTable, statsKey,
                         HConstants.LATEST_TIMESTAMP);
@@ -128,17 +103,18 @@ public class GuidePostsCache {
                 return guidePostsInfo;
             } catch (TableNotFoundException e) {
                 // On a fresh install, stats might not yet be created, don't warn about this.
-                logger.debug("Unable to locate Phoenix stats table: " + tableName.toString(), e);
-                return prevGuidepostInfo;
+                logger.debug("Unable to locate Phoenix stats table", e);
+                return GuidePostsInfo.NO_GUIDEPOST;
             } catch (IOException e) {
-                logger.warn("Unable to read from stats table: " + tableName.toString(), e);
-                return prevGuidepostInfo;
+                logger.warn("Unable to read from stats table", e);
+                // Just cache empty stats. We'll try again after some time anyway.
+                return GuidePostsInfo.NO_GUIDEPOST;
             } finally {
                 try {
                     statsHTable.close();
                 } catch (IOException e) {
                     // Log, but continue. We have our stats anyway now.
-                    logger.warn("Unable to close stats table: " + tableName.toString(), e);
+                    logger.warn("Unable to close stats table", e);
                 }
             }
         }
@@ -149,31 +125,21 @@ public class GuidePostsCache {
         void traceStatsUpdate(GuidePostsKey key, GuidePostsInfo info) {
             if (logger.isTraceEnabled()) {
                 logger.trace("Updating local TableStats cache (id={}) for {}, size={}bytes",
-                        new Object[] {Objects.hashCode(GuidePostsCache.this), key, info.getEstimatedSize()});
+                      new Object[] {Objects.hashCode(GuidePostsCache.this), key,
+                      info.getEstimatedSize()});
             }
         }
     }
 
     /**
-     * {@link PhoenixStatsLoader} implementation for the Stats Loader.
      * Empty stats loader if stats are disabled
      */
-	protected class EmptyStatsLoader implements PhoenixStatsLoader {
+    protected class EmptyStatsLoader extends CacheLoader<GuidePostsKey, GuidePostsInfo> {
         @Override
-        public boolean needsLoad() {
-            return false;
-        }
-
-        @Override
-        public GuidePostsInfo loadStats(GuidePostsKey statsKey) throws Exception {
+        public GuidePostsInfo load(GuidePostsKey tableName) throws Exception {
             return GuidePostsInfo.NO_GUIDEPOST;
         }
-
-        @Override
-        public GuidePostsInfo loadStats(GuidePostsKey statsKey, GuidePostsInfo prevGuidepostInfo) throws Exception {
-            return GuidePostsInfo.NO_GUIDEPOST;
-        }
-	}
+    }
 
     /**
      * Returns the underlying cache. Try to use the provided methods instead of accessing the cache

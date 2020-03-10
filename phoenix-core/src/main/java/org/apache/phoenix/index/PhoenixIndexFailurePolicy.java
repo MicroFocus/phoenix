@@ -17,6 +17,8 @@
  */
 package org.apache.phoenix.index;
 
+import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.TABLE_FAMILY_BYTES;
+
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.sql.SQLException;
@@ -37,6 +39,7 @@ import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.client.ConnectionUtils;
+import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Table;
@@ -57,7 +60,6 @@ import org.apache.phoenix.hbase.index.table.HTableInterfaceReference;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
 import org.apache.phoenix.hbase.index.write.DelegateIndexFailurePolicy;
 import org.apache.phoenix.hbase.index.write.KillServerOnFailurePolicy;
-import org.apache.phoenix.hbase.index.write.LeaveIndexActiveFailurePolicy;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.query.QueryServices;
@@ -131,11 +133,6 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
         } else {
         	throwIndexWriteFailure = Boolean.parseBoolean(value);
         }
-
-        boolean killServer = env.getConfiguration().getBoolean(QueryServices.INDEX_FAILURE_KILL_SERVER, true);
-        if (!killServer) {
-            setDelegate(new LeaveIndexActiveFailurePolicy());
-        } // else, default in constructor is KillServerOnFailurePolicy
     }
 
     /**
@@ -152,24 +149,6 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
     public void handleFailure(Multimap<HTableInterfaceReference, Mutation> attempted, Exception cause) throws IOException {
         boolean throwing = true;
         long timestamp = HConstants.LATEST_TIMESTAMP;
-        // we should check if failed list of mutation are part of Index Rebuilder or not.
-        // If its part of Index Rebuilder, we throw exception and do retries.
-        // If succeeds, we don't update Index State.
-        // Once those retries are exhausted, we transition Index to DISABLE
-        // It's being handled as part of PhoenixIndexFailurePolicy.doBatchWithRetries
-        Mutation checkMutationForRebuilder = attempted.entries().iterator().next().getValue();
-        boolean isIndexRebuild =
-                PhoenixIndexMetaData.isIndexRebuild(checkMutationForRebuilder.getAttributesMap());
-        if (isIndexRebuild) {
-            SQLException sqlException =
-                    new SQLExceptionInfo.Builder(SQLExceptionCode.INDEX_WRITE_FAILURE)
-                            .setRootCause(cause).setMessage(cause.getLocalizedMessage()).build()
-                            .buildException();
-            IOException ioException = ServerUtil.wrapInDoNotRetryIOException(
-                        "Retrying Index rebuild mutation, we will update Index state to DISABLE "
-                        + "if all retries are exhusated", sqlException, timestamp);
-            throw ioException;
-        }
         try {
             timestamp = handleFailureWithExceptions(attempted, cause);
             throwing = false;
@@ -184,8 +163,10 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
                                 .setRootCause(cause).setMessage(cause.getLocalizedMessage()).build()
                                 .buildException();
                 IOException ioException = ServerUtil.wrapInDoNotRetryIOException(null, sqlException, timestamp);
-                // Here we throw index write failure to client so it can retry index mutation.
-                if (throwIndexWriteFailure) {
+            	Mutation m = attempted.entries().iterator().next().getValue();
+            	boolean isIndexRebuild = PhoenixIndexMetaData.isIndexRebuild(m.getAttributesMap());
+            	// Always throw if rebuilding index since the rebuilder needs to know if it was successful
+            	if (throwIndexWriteFailure || isIndexRebuild) {
             		throw ioException;
             	} else {
                     LOG.warn("Swallowing index write failure", ioException);
@@ -331,7 +312,7 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
                     new HashMap<ImmutableBytesWritable, String>();
             for (PTable index : indexes) {
                 if (localIndex == null) localIndex = index;
-                localIndexNames.put(new ImmutableBytesWritable(index.getviewIndexIdType().toBytes(
+                localIndexNames.put(new ImmutableBytesWritable(index.getViewIndexType().toBytes(
                         index.getViewIndexId())), index.getName().getString());
             }
             if (localIndex == null) {
@@ -443,8 +424,6 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
 
     public static interface MutateCommand {
         void doMutation() throws IOException;
-
-        List<Mutation> getMutationList();
     }
 
     /**
@@ -479,23 +458,13 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
                 Thread.sleep(ConnectionUtils.getPauseTime(pause, numRetry)); // HBase's exponential backoff
                 mutateCommand.doMutation();
                 // success - change the index state from PENDING_DISABLE back to ACTIVE
-                // If it's not Index Rebuild
-                if (!PhoenixIndexMetaData.isIndexRebuild(
-                    mutateCommand.getMutationList().get(0).getAttributesMap())){
-                    handleIndexWriteSuccessFromClient(iwe, connection);
-                }
+                handleIndexWriteSuccessFromClient(iwe, connection);
                 return;
             } catch (IOException e) {
                 SQLException inferredE = ServerUtil.parseLocalOrRemoteServerException(e);
                 if (inferredE == null || inferredE.getErrorCode() != SQLExceptionCode.INDEX_WRITE_FAILURE.getErrorCode()) {
-                    // If this call is from phoenix client, we also need to check if SQLException
-                    // error is INDEX_METADATA_NOT_FOUND or not
-                    // if it's not an INDEX_METADATA_NOT_FOUND, throw exception,
-                    // to be handled normally in caller's try-catch
-                    if (inferredE.getErrorCode() != SQLExceptionCode.INDEX_METADATA_NOT_FOUND
-                            .getErrorCode()) {
-                        throw e;
-                    }
+                    // if it's not an index write exception, throw exception, to be handled normally in caller's try-catch
+                    throw e;
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -537,11 +506,25 @@ public class PhoenixIndexFailurePolicy extends DelegateIndexFailurePolicy {
     }
 
     private static void incrementCounterForIndex(PhoenixConnection conn, String failedIndexTable) throws IOException {
-        IndexUtil.incrementCounterForIndex(conn, failedIndexTable, 1);
+        incrementCounterForIndex(conn, failedIndexTable, 1);
     }
 
     private static void decrementCounterForIndex(PhoenixConnection conn, String failedIndexTable) throws IOException {
-        IndexUtil.incrementCounterForIndex(conn, failedIndexTable, -1);
+        incrementCounterForIndex(conn, failedIndexTable, -1);
+    }
+    
+    private static void incrementCounterForIndex(PhoenixConnection conn, String failedIndexTable,long amount) throws IOException {
+        byte[] indexTableKey = SchemaUtil.getTableKeyFromFullName(failedIndexTable);
+        Increment incr = new Increment(indexTableKey);
+        incr.addColumn(TABLE_FAMILY_BYTES, PhoenixDatabaseMetaData.PENDING_DISABLE_COUNT_BYTES, amount);
+        try {
+            conn.getQueryServices()
+                    .getTable(SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME,
+                            conn.getQueryServices().getProps()).getName())
+                    .increment(incr);
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
     }
 
     private static boolean canRetryMore(int numRetry, int maxRetries, long canRetryUntil) {

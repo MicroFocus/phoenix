@@ -17,26 +17,16 @@
  */
 package org.apache.phoenix.schema;
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.hadoop.hbase.regionserver.ConstantSizeRegionSplitPolicy;
 
-public class MetaDataSplitPolicy extends SplitOnLeadingVarCharColumnsPolicy {
+import org.apache.phoenix.util.SchemaUtil;
 
-	@Override
-	protected boolean shouldSplit() {
-		Configuration conf = getConf();
-		return super.shouldSplit() && conf.getBoolean(QueryServices.SYSTEM_CATALOG_SPLITTABLE,
-				QueryServicesOptions.DEFAULT_SYSTEM_CATALOG_SPLITTABLE);
-	}
 
-	@Override
-	protected int getColumnToSplitAt() {
-		// SYSTEM.CATALOG rowkey is (tenant id, schema name, table name, column name,
-		// column family) ensure all meta data rows for a given schema are in the same
-		// region (indexes and tables are in the same schema as we lock the parent table
-		// when modifying an index)
-		return 2;
-	}
+public class MetaDataSplitPolicy extends ConstantSizeRegionSplitPolicy {
 
+    @Override
+    protected boolean shouldSplit() {
+        // never split SYSTEM.CATALOG
+        return false;
+    }
 }

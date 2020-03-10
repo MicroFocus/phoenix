@@ -45,11 +45,6 @@ public class DelegateTuple implements Tuple {
     }
 
     @Override
-    public Cell mergeWithDynColsListBytesAndGetValue(int index, byte[] dynColsList) {
-        return delegate.mergeWithDynColsListBytesAndGetValue(index, dynColsList);
-    }
-
-    @Override
     public Cell getValue(int index) {
         return delegate.getValue(index);
     }

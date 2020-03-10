@@ -35,7 +35,6 @@ public abstract class BaseCompoundExpression extends BaseExpression {
     private boolean isStateless;
     private Determinism determinism;
     private boolean requiresFinalEvaluation;
-    private boolean cloneExpression;
    
     public BaseCompoundExpression() {
         init(Collections.<Expression>emptyList());
@@ -50,7 +49,6 @@ public abstract class BaseCompoundExpression extends BaseExpression {
         boolean isStateless = true;
         boolean isNullable = false;
         boolean requiresFinalEvaluation = false;
-        boolean cloneExpression = false;
         this.determinism = Determinism.ALWAYS;
         for (int i = 0; i < children.size(); i++) {
             Expression child = children.get(i);
@@ -58,12 +56,10 @@ public abstract class BaseCompoundExpression extends BaseExpression {
             isStateless &= child.isStateless();
             this.determinism = this.determinism.combine(child.getDeterminism());
             requiresFinalEvaluation |= child.requiresFinalEvaluation();
-            cloneExpression |= child.isCloneExpression();
         }
         this.isStateless = isStateless;
         this.isNullable = isNullable;
         this.requiresFinalEvaluation = requiresFinalEvaluation;
-        this.cloneExpression = cloneExpression;
     }
     
     @Override
@@ -76,12 +72,7 @@ public abstract class BaseCompoundExpression extends BaseExpression {
     public Determinism getDeterminism() {
         return determinism;
     }
-
-    @Override
-    public boolean isCloneExpression() {
-        return this.cloneExpression;
-    }
-
+    
     @Override
     public boolean isStateless() {
         return isStateless;

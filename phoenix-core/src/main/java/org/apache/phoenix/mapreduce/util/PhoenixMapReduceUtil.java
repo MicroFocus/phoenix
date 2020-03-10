@@ -19,7 +19,6 @@ package org.apache.phoenix.mapreduce.util;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapreduce.InputFormat;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.lib.db.DBWritable;
 import org.apache.phoenix.mapreduce.PhoenixInputFormat;
@@ -71,23 +70,6 @@ public final class PhoenixMapReduceUtil {
     /**
      *
      * @param job
-     * @param inputClass        DBWritable class
-     * @param inputFormatClass  InputFormat class
-     * @param tableName         Input table name
-     * @param inputQuery        Select query
-     */
-
-    public static void setInput(final Job job, final Class<? extends DBWritable> inputClass,
-                                final Class<? extends InputFormat> inputFormatClass,
-                                final String tableName, final String inputQuery) {
-        final Configuration configuration = setInput(job, inputClass, inputFormatClass, tableName);
-        PhoenixConfigurationUtil.setInputQuery(configuration, inputQuery);
-        PhoenixConfigurationUtil.setSchemaType(configuration, SchemaType.QUERY);
-    }
-
-    /**
-     *
-     * @param job
      * @param inputClass DBWritable class
      * @param snapshotName The name of a snapshot (of a table) to read from
      * @param tableName Input table name
@@ -98,7 +80,7 @@ public final class PhoenixMapReduceUtil {
     public static void setInput(final Job job, final Class<? extends DBWritable> inputClass, final String snapshotName, String tableName,
         Path restoreDir, final String conditions, final String... fieldNames) throws
         IOException {
-        final Configuration configuration = setSnapshotInput(job, inputClass, snapshotName, tableName, restoreDir, SchemaType.QUERY);
+        final Configuration configuration = setSnapshotInput(job, inputClass, snapshotName, tableName, restoreDir);
         if(conditions != null) {
             PhoenixConfigurationUtil.setInputTableConditions(configuration, conditions);
         }
@@ -117,16 +99,11 @@ public final class PhoenixMapReduceUtil {
     public static void setInput(final Job job, final Class<? extends DBWritable> inputClass, final String snapshotName, String tableName,
         Path restoreDir, String inputQuery) throws
         IOException {
-        final Configuration configuration = setSnapshotInput(job, inputClass, snapshotName, tableName, restoreDir, SchemaType.QUERY);
+        final Configuration configuration = setSnapshotInput(job, inputClass, snapshotName, tableName, restoreDir);
         if(inputQuery != null) {
             PhoenixConfigurationUtil.setInputQuery(configuration, inputQuery);
         }
 
-    }
-
-    public static void setInput(final Job job, final Class<? extends DBWritable> inputClass, final String snapshotName, String tableName,
-                                Path restoreDir) {
-        setSnapshotInput(job, inputClass, snapshotName, tableName, restoreDir, SchemaType.QUERY);
     }
 
     /**
@@ -138,7 +115,7 @@ public final class PhoenixMapReduceUtil {
      * @param restoreDir a temporary dir to copy the snapshot files into
      */
     private static Configuration setSnapshotInput(Job job, Class<? extends DBWritable> inputClass, String snapshotName,
-        String tableName, Path restoreDir, SchemaType schemaType) {
+        String tableName, Path restoreDir) {
         job.setInputFormatClass(PhoenixInputFormat.class);
         final Configuration configuration = job.getConfiguration();
         PhoenixConfigurationUtil.setInputClass(configuration, inputClass);
@@ -146,21 +123,12 @@ public final class PhoenixMapReduceUtil {
         PhoenixConfigurationUtil.setInputTableName(configuration, tableName);
 
         PhoenixConfigurationUtil.setRestoreDirKey(configuration, new Path(restoreDir, UUID.randomUUID().toString()).toString());
-        PhoenixConfigurationUtil.setSchemaType(configuration, schemaType);
+        PhoenixConfigurationUtil.setSchemaType(configuration, SchemaType.QUERY);
         return configuration;
     }
 
     private static Configuration setInput(final Job job, final Class<? extends DBWritable> inputClass, final String tableName){
         job.setInputFormatClass(PhoenixInputFormat.class);
-        final Configuration configuration = job.getConfiguration();
-        PhoenixConfigurationUtil.setInputTableName(configuration, tableName);
-        PhoenixConfigurationUtil.setInputClass(configuration,inputClass);
-        return configuration;
-    }
-
-    private static Configuration setInput(final Job job, final Class<? extends DBWritable> inputClass,
-                                          final Class<? extends InputFormat> inputFormatClass, final String tableName){
-        job.setInputFormatClass(inputFormatClass);
         final Configuration configuration = job.getConfiguration();
         PhoenixConfigurationUtil.setInputTableName(configuration, tableName);
         PhoenixConfigurationUtil.setInputClass(configuration,inputClass);

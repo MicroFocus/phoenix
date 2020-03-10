@@ -47,7 +47,6 @@ public final class Main extends Configured implements Tool {
     public static final String TRACE_SERVER_HTTP_JETTY_HOME_KEY =
             "phoenix.traceserver.http.home";
     public static final String DEFAULT_HTTP_HOME = "/";
-    public static final String DEFAULT_WEBAPP_DIR_LOCATION = "src/main/webapp";
 
     public static void main(String[] args) throws Exception {
         int ret = ToolRunner.run(HBaseConfiguration.create(), new Main(), args);
@@ -63,17 +62,15 @@ public final class Main extends Configured implements Tool {
         final String home = getConf().get(TRACE_SERVER_HTTP_JETTY_HOME_KEY,
                 DEFAULT_HTTP_HOME);
         //setting up the embedded server
+        ProtectionDomain domain = Main.class.getProtectionDomain();
+        URL location = domain.getCodeSource().getLocation();
+        String webappDirLocation = location.toString().split("target")[0] +"src/main/webapp";
         Server server = new Server(port);
         WebAppContext root = new WebAppContext();
 
-        URL webAppDir = Thread.currentThread().getContextClassLoader().getResource(DEFAULT_WEBAPP_DIR_LOCATION);
-        if (webAppDir == null) {
-            throw new RuntimeException(String.format("No %s directory was found into the JAR file", DEFAULT_WEBAPP_DIR_LOCATION));
-        }
-
         root.setContextPath(home);
-        root.setDescriptor(DEFAULT_WEBAPP_DIR_LOCATION + "/WEB-INF/web.xml");
-        root.setResourceBase(webAppDir.toURI().toString());
+        root.setDescriptor(webappDirLocation + "/WEB-INF/web.xml");
+        root.setResourceBase(webappDirLocation);
         root.setParentLoaderPriority(true);
         server.setHandler(root);
 

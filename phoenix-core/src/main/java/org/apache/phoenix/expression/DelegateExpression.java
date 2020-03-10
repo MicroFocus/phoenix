@@ -105,9 +105,4 @@ public class DelegateExpression implements Expression {
         return delegate.requiresFinalEvaluation();
     }
 
-    @Override
-    public boolean isCloneExpression() {
-        return delegate.isCloneExpression();
-    }
-
 }

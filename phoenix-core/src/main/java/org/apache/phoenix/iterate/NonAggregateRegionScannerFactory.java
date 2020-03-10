@@ -42,7 +42,6 @@ import org.apache.phoenix.cache.TenantCache;
 import org.apache.phoenix.coprocessor.BaseRegionScanner;
 import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
 import org.apache.phoenix.coprocessor.HashJoinRegionScanner;
-import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.execute.TupleProjector;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.expression.KeyValueColumnExpression;
@@ -51,14 +50,11 @@ import org.apache.phoenix.expression.SingleCellColumnExpression;
 import org.apache.phoenix.expression.function.ArrayIndexFunction;
 import org.apache.phoenix.hbase.index.covered.update.ColumnReference;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
-import org.apache.phoenix.hbase.index.util.VersionUtil;
 import org.apache.phoenix.index.IndexMaintainer;
 import org.apache.phoenix.join.HashJoinInfo;
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil;
 import org.apache.phoenix.memory.MemoryManager;
 import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.schema.KeyValueSchema;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.ValueBitSet;
@@ -72,7 +68,6 @@ import org.apache.phoenix.util.IndexUtil;
 import org.apache.phoenix.util.ScanUtil;
 import org.apache.phoenix.util.ServerUtil;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 
@@ -157,24 +152,15 @@ public class NonAggregateRegionScannerFactory extends RegionScannerFactory {
 
     final ImmutableBytesPtr tenantId = ScanUtil.getTenantId(scan);
     if (j != null) {
-        innerScanner = new HashJoinRegionScanner(env, innerScanner, arrayKVRefs, arrayFuncRefs,
-                                                 p, j, tenantId, useQualifierAsIndex,
-                                                 useNewValueColumnQualifier);
+      innerScanner = new HashJoinRegionScanner(innerScanner, p, j, tenantId, env, useQualifierAsIndex,
+          useNewValueColumnQualifier);
     }
     if (scanOffset != null) {
       innerScanner = getOffsetScanner(innerScanner, new OffsetResultIterator(
               new RegionScannerResultIterator(innerScanner, getMinMaxQualifiersFromScan(scan), encodingScheme), scanOffset),
           scan.getAttribute(QueryConstants.LAST_SCAN) != null);
     }
-    boolean spoolingEnabled =
-            env.getConfiguration().getBoolean(
-                QueryServices.SERVER_ORDERBY_SPOOLING_ENABLED_ATTRIB,
-                QueryServicesOptions.DEFAULT_SERVER_ORDERBY_SPOOLING_ENABLED);
-    long thresholdBytes =
-            env.getConfiguration().getLong(QueryServices.SERVER_SPOOL_THRESHOLD_BYTES_ATTRIB,
-                QueryServicesOptions.DEFAULT_SERVER_SPOOL_THRESHOLD_BYTES);
-    final OrderedResultIterator iterator =
-            deserializeFromScan(scan, innerScanner, spoolingEnabled, thresholdBytes);
+    final OrderedResultIterator iterator = deserializeFromScan(scan, innerScanner);
     if (iterator == null) {
       return innerScanner;
     }
@@ -182,31 +168,15 @@ public class NonAggregateRegionScannerFactory extends RegionScannerFactory {
     return getTopNScanner(env, innerScanner, iterator, tenantId);
   }
 
-    @VisibleForTesting
-    static OrderedResultIterator deserializeFromScan(Scan scan, RegionScanner s,
-            boolean spoolingEnabled, long thresholdBytes) {
+  private static OrderedResultIterator deserializeFromScan(Scan scan, RegionScanner s) {
     byte[] topN = scan.getAttribute(BaseScannerRegionObserver.TOPN);
     if (topN == null) {
       return null;
-        }
-        int clientVersion = ScanUtil.getClientVersion(scan);
-        // Client including and after 4.15 and 5.1 are not going to serialize thresholdBytes
-        // so we need to decode this only for older clients to not break wire compat
-        boolean shouldDecodeSpoolThreshold =
-                (scan.getAttribute(BaseScannerRegionObserver.CLIENT_VERSION) == null)
-                        || (VersionUtil.decodeMajorVersion(clientVersion) > 5)
-                        || (VersionUtil.decodeMajorVersion(clientVersion) == 5
-                                && clientVersion < MetaDataProtocol.MIN_5_x_DISABLE_SERVER_SPOOL_THRESHOLD)
-                        || (VersionUtil.decodeMajorVersion(clientVersion) == 4
-                                && clientVersion < MetaDataProtocol.MIN_4_x_DISABLE_SERVER_SPOOL_THRESHOLD);
-        ByteArrayInputStream stream = new ByteArrayInputStream(topN); // TODO: size?
-        try {
+    }
+    ByteArrayInputStream stream = new ByteArrayInputStream(topN); // TODO: size?
+    try {
       DataInputStream input = new DataInputStream(stream);
-      if (shouldDecodeSpoolThreshold) {
-        // Read off the scan but ignore, we won't honor client sent thresholdbytes, but the
-        // one set on server 
-        WritableUtils.readVInt(input);
-      }
+      int thresholdBytes = WritableUtils.readVInt(input);
       int limit = WritableUtils.readVInt(input);
       int estimatedRowSize = WritableUtils.readVInt(input);
       int size = WritableUtils.readVInt(input);
@@ -218,8 +188,8 @@ public class NonAggregateRegionScannerFactory extends RegionScannerFactory {
       }
       PTable.QualifierEncodingScheme encodingScheme = EncodedColumnsUtil.getQualifierEncodingScheme(scan);
       ResultIterator inner = new RegionScannerResultIterator(s, EncodedColumnsUtil.getMinMaxQualifiersFromScan(scan), encodingScheme);
-      return new OrderedResultIterator(inner, orderByExpressions, spoolingEnabled,
-              thresholdBytes, limit >= 0 ? limit : null, null, estimatedRowSize);
+      return new OrderedResultIterator(inner, orderByExpressions, thresholdBytes, limit >= 0 ? limit : null, null,
+          estimatedRowSize);
     } catch (IOException e) {
       throw new RuntimeException(e);
     } finally {

@@ -21,31 +21,25 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 
 import org.apache.phoenix.util.PhoenixRuntime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class LoggingPhoenixResultSet extends DelegateResultSet {
     
+    private static final Logger logger = LoggerFactory.getLogger(LoggingPhoenixResultSet.class);
     private PhoenixMetricsLog phoenixMetricsLog;
-    private String sql;
-    private boolean areMetricsLogged;
-
-    public LoggingPhoenixResultSet(ResultSet rs, PhoenixMetricsLog phoenixMetricsLog, String sql) {
+    
+    public LoggingPhoenixResultSet(ResultSet rs, PhoenixMetricsLog phoenixMetricsLog) {
         super(rs);
         this.phoenixMetricsLog = phoenixMetricsLog;
-        this.sql = sql;
-        this.areMetricsLogged = false;
     }
     
     @Override
     public void close() throws SQLException {
-        if (!rs.isClosed()) {
-            super.close();
-        }
-        if (!this.areMetricsLogged) {
-            phoenixMetricsLog.logOverAllReadRequestMetrics(PhoenixRuntime.getOverAllReadRequestMetricInfo(rs), sql);
-            phoenixMetricsLog.logRequestReadMetrics(PhoenixRuntime.getRequestReadMetricInfo(rs), sql);
-            PhoenixRuntime.resetMetrics(rs);
-            this.areMetricsLogged = true;
-        }
+        phoenixMetricsLog.logOverAllReadRequestMetrics(logger, PhoenixRuntime.getOverAllReadRequestMetricInfo(rs));
+        phoenixMetricsLog.logRequestReadMetrics(logger, PhoenixRuntime.getRequestReadMetricInfo(rs));
+        PhoenixRuntime.resetMetrics(rs);
+        super.close();
     }
 
 }

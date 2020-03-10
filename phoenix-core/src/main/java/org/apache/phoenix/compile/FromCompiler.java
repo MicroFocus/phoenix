@@ -31,7 +31,6 @@ import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MetaDataMutationResult;
-import org.apache.phoenix.coprocessor.MetaDataProtocol.MutationCode;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.parse.AliasedNode;
@@ -64,7 +63,6 @@ import org.apache.phoenix.schema.ColumnFamilyNotFoundException;
 import org.apache.phoenix.schema.ColumnNotFoundException;
 import org.apache.phoenix.schema.ColumnRef;
 import org.apache.phoenix.schema.FunctionNotFoundException;
-import org.apache.phoenix.schema.IndexNotFoundException;
 import org.apache.phoenix.schema.MetaDataClient;
 import org.apache.phoenix.schema.MetaDataEntityNotFoundException;
 import org.apache.phoenix.schema.PColumn;
@@ -81,7 +79,6 @@ import org.apache.phoenix.schema.PTableImpl;
 import org.apache.phoenix.schema.PTableKey;
 import org.apache.phoenix.schema.PTableType;
 import org.apache.phoenix.schema.ProjectedColumn;
-import org.apache.phoenix.schema.RowKeySchema;
 import org.apache.phoenix.schema.SchemaNotFoundException;
 import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.schema.TableNotFoundException;
@@ -266,15 +263,6 @@ public class FromCompiler {
         return visitor;
     }
 
-    public static ColumnResolver getIndexResolver(SingleTableStatement statement,
-                              PhoenixConnection connection) throws SQLException {
-        try {
-            return getResolver(statement, connection);
-        } catch (TableNotFoundException e) {
-            throw new IndexNotFoundException(e.getSchemaName(), e.getTableName(), e.getTimeStamp());
-        }
-    }
-
     public static ColumnResolver getResolver(SingleTableStatement statement, PhoenixConnection connection, Map<String, UDFParseNode> udfParseNodes)
             throws SQLException {
         SingleTableColumnResolver visitor = new SingleTableColumnResolver(connection, statement.getTable(), true, 0, udfParseNodes);
@@ -289,15 +277,13 @@ public class FromCompiler {
             Expression sourceExpression = projector.getColumnProjector(column.getPosition()).getExpression();
             PColumnImpl projectedColumn = new PColumnImpl(column.getName(), column.getFamilyName(),
                     sourceExpression.getDataType(), sourceExpression.getMaxLength(), sourceExpression.getScale(), sourceExpression.isNullable(),
-                    column.getPosition(), sourceExpression.getSortOrder(), column.getArraySize(), column.getViewConstant(), column.isViewReferenced(), column.getExpressionStr(), column.isRowTimestamp(), column.isDynamic(), column.getColumnQualifierBytes(),
-                column.getTimestamp());
+                    column.getPosition(), sourceExpression.getSortOrder(), column.getArraySize(), column.getViewConstant(), column.isViewReferenced(), column.getExpressionStr(), column.isRowTimestamp(), column.isDynamic(), column.getColumnQualifierBytes());
             projectedColumns.add(projectedColumn);
         }
-        PTable t = PTableImpl.builderWithColumns(table, projectedColumns)
-                .build();
+        PTable t = PTableImpl.makePTable(table, projectedColumns);
         return new SingleTableColumnResolver(connection, new TableRef(tableRef.getTableAlias(), t, tableRef.getLowerBoundTimeStamp(), tableRef.hasDynamicCols()));
     }
-
+    
     public static ColumnResolver getResolver(TableRef tableRef)
             throws SQLException {
         SingleTableColumnResolver visitor = new SingleTableColumnResolver(tableRef);
@@ -379,30 +365,10 @@ public class FromCompiler {
             if (connection.getSchema() != null) {
                 schema = schema != null ? schema : connection.getSchema();
             }
-
             // Storage scheme and encoding scheme don't matter here since the PTable is being used only for the purposes of create table.
             // The actual values of these two will be determined by the metadata client.
-            PName tenantId = connection.getTenantId();
-            PTableImpl.checkTenantId(tenantId);
-            String tableName = table.getName().getTableName();
-            PName name = PNameFactory.newName(SchemaUtil.getTableName(schema, tableName));
-            PTable theTable = new PTableImpl.Builder()
-                    .setTenantId(tenantId)
-                    .setName(name)
-                    .setKey(new PTableKey(tenantId, name.getString()))
-                    .setSchemaName(PNameFactory.newName(schema))
-                    .setTableName(PNameFactory.newName(tableName))
-                    .setType(PTableType.VIEW)
-                    .setViewType(PTable.ViewType.MAPPED)
-                    .setTimeStamp(scn == null ? HConstants.LATEST_TIMESTAMP : scn)
-                    .setPkColumns(Collections.emptyList())
-                    .setAllColumns(Collections.emptyList())
-                    .setRowKeySchema(RowKeySchema.EMPTY_SCHEMA)
-                    .setIndexes(Collections.emptyList())
-                    .setFamilyAttributes(families)
-                    .setPhysicalNames(Collections.emptyList())
-                    .setNamespaceMapped(isNamespaceMapped)
-                    .build();
+            PTable theTable = new PTableImpl(connection.getTenantId(), schema, table.getName().getTableName(),
+                    scn == null ? HConstants.LATEST_TIMESTAMP : scn, families, isNamespaceMapped);
             theTable = this.addDynamicColumns(table.getDynamicColumns(), theTable);
             alias = null;
             tableRefs = ImmutableList.of(new TableRef(alias, theTable, timeStamp, !table.getDynamicColumns().isEmpty()));
@@ -612,9 +578,8 @@ public class FromCompiler {
                 MetaDataMutationResult result = client.updateCache(tenantId, schemaName, tableName, alwaysHitServer);
                 timeStamp = TransactionUtil.getResolvedTimestamp(connection, result);
                 theTable = result.getTable();
-                MutationCode mutationCode = result.getMutationCode();
                 if (theTable == null) {
-					throw new TableNotFoundException(schemaName, tableName, timeStamp);
+                    throw new TableNotFoundException(schemaName, tableName, timeStamp);
                 }
             } else {
                 try {
@@ -736,7 +701,7 @@ public class FromCompiler {
             if (!dynColumns.isEmpty()) {
                 List<PColumn> allcolumns = new ArrayList<PColumn>();
                 List<PColumn> existingColumns = theTable.getColumns();
-                // Need to skip the salting column, as it's handled in the PTable builder call below
+                // Need to skip the salting column, as it's added in the makePTable call below
                 allcolumns.addAll(theTable.getBucketNum() == null ? existingColumns : existingColumns.subList(1, existingColumns.size()));
                 // Position still based on with the salting columns
                 int position = existingColumns.size();
@@ -750,12 +715,10 @@ public class FromCompiler {
                         familyName = PNameFactory.newName(family);
                     }
                     allcolumns.add(new PColumnImpl(name, familyName, dynColumn.getDataType(), dynColumn.getMaxLength(),
-                            dynColumn.getScale(), dynColumn.isNull(), position, dynColumn.getSortOrder(), dynColumn.getArraySize(), null, false, dynColumn.getExpression(), false, true, Bytes.toBytes(dynColumn.getColumnDefName().getColumnName()),
-                        HConstants.LATEST_TIMESTAMP));
+                            dynColumn.getScale(), dynColumn.isNull(), position, dynColumn.getSortOrder(), dynColumn.getArraySize(), null, false, dynColumn.getExpression(), false, true, Bytes.toBytes(dynColumn.getColumnDefName().getColumnName())));
                     position++;
                 }
-                theTable = PTableImpl.builderWithColumns(theTable, allcolumns)
-                        .build();
+                theTable = PTableImpl.makePTable(theTable, allcolumns);
             }
             return theTable;
         }
@@ -857,36 +820,14 @@ public class FromCompiler {
                 PName name = PNameFactory.newName(alias);
                 PColumnImpl column = new PColumnImpl(PNameFactory.newName(alias),
                         PNameFactory.newName(QueryConstants.DEFAULT_COLUMN_FAMILY),
-                        null, 0, 0, true, position++, SortOrder.ASC, null, null, false, null, false, false, name.getBytes(),
-                    HConstants.LATEST_TIMESTAMP);
+                        null, 0, 0, true, position++, SortOrder.ASC, null, null, false, null, false, false, name.getBytes());
                 columns.add(column);
             }
-            PTable t = new PTableImpl.Builder()
-                    .setType(PTableType.SUBQUERY)
-                    .setTimeStamp(MetaDataProtocol.MIN_TABLE_TIMESTAMP)
-                    .setIndexDisableTimestamp(0L)
-                    .setSequenceNumber(PTable.INITIAL_SEQ_NUM)
-                    .setImmutableRows(false)
-                    .setDisableWAL(false)
-                    .setMultiTenant(false)
-                    .setStoreNulls(false)
-                    .setUpdateCacheFrequency(0)
-                    .setNamespaceMapped(SchemaUtil.isNamespaceMappingEnabled(PTableType.SUBQUERY,
-                            connection.getQueryServices().getProps()))
-                    .setAppendOnlySchema(false)
-                    .setImmutableStorageScheme(ImmutableStorageScheme.ONE_CELL_PER_COLUMN)
-                    .setQualifierEncodingScheme(QualifierEncodingScheme.NON_ENCODED_QUALIFIERS)
-                    .setBaseColumnCount(QueryConstants.BASE_TABLE_BASE_COLUMN_COUNT)
-                    .setEncodedCQCounter(PTable.EncodedCQCounter.NULL_COUNTER)
-                    .setUseStatsForParallelization(true)
-                    .setExcludedColumns(ImmutableList.of())
-                    .setSchemaName(PName.EMPTY_NAME)
-                    .setTableName(PName.EMPTY_NAME)
-                    .setRowKeyOrderOptimizable(false)
-                    .setIndexes(Collections.emptyList())
-                    .setPhysicalNames(ImmutableList.of())
-                    .setColumns(columns)
-                    .build();
+            PTable t = PTableImpl.makePTable(null, PName.EMPTY_NAME, PName.EMPTY_NAME, PTableType.SUBQUERY, null,
+                    MetaDataProtocol.MIN_TABLE_TIMESTAMP, PTable.INITIAL_SEQ_NUM, null, null, columns, null, null,
+                    Collections.<PTable> emptyList(), false, Collections.<PName> emptyList(), null, null, false, false,
+                    false, null, null, null, null, false, null, 0, 0L, SchemaUtil
+                            .isNamespaceMappingEnabled(PTableType.SUBQUERY, connection.getQueryServices().getProps()), null, false, ImmutableStorageScheme.ONE_CELL_PER_COLUMN, QualifierEncodingScheme.NON_ENCODED_QUALIFIERS, PTable.EncodedCQCounter.NULL_COUNTER, true);
 
             String alias = subselectNode.getAlias();
             TableRef tableRef = new TableRef(alias, t, MetaDataProtocol.MIN_TABLE_TIMESTAMP, false);

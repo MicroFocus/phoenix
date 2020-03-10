@@ -51,23 +51,27 @@ public class SpillFile implements Closeable {
     private Map<Integer, TempFile> tempFiles;
     // Custom spill files directory
     private File spillFilesDirectory = null;
-
+    
     // Wrapper class for a TempFile: File + RandomAccessFile
-    private static class TempFile implements Closeable {
-        private final RandomAccessFile rndFile;
-        private final File file;
+    private static class TempFile implements Closeable{
+    	private RandomAccessFile rndFile;
+    	private File file;
+    	
+    	public TempFile(File file, RandomAccessFile rndFile) {
+    		this.file = file;
+    		this.rndFile = rndFile;
+    	}    	
+    	    	
+    	public FileChannel getChannel() {
+    		return rndFile.getChannel();
+    	}
 
-        public TempFile(File file, RandomAccessFile rndFile) {
-            this.file = file;
-            this.rndFile = rndFile;
-        }
-
-        @Override
-        public void close() throws IOException {
-            Closeables.closeQuietly(rndFile.getChannel());
-            Closeables.closeQuietly(rndFile);
-
-            if (file != null) {
+		@Override
+		public void close() throws IOException {
+			Closeables.closeQuietly(rndFile.getChannel());
+			Closeables.closeQuietly(rndFile);
+			
+			if (file != null) {
                 if (logger.isDebugEnabled()) {
                     logger.debug("Deleting tempFile: " + file.getAbsolutePath());
                 }
@@ -75,9 +79,9 @@ public class SpillFile implements Closeable {
                     file.delete();
                 } catch (SecurityException e) {
                     logger.warn("IOException thrown while closing Closeable." + e);
-                }
+            	}
             }
-        }
+		}
     }
 
     private SpillFile(File spillFilesDirectory) throws IOException {
@@ -116,29 +120,29 @@ public class SpillFile implements Closeable {
     /**
      * Random access to a page of the current spill file
      * @param index
-     * @return a file seeked to the correct page
      */
-    public RandomAccessFile getPage(int index) {
+    public MappedByteBuffer getPage(int index) {
         try {
-            TempFile tempFile = null;
-            int fileIndex = 0;
-
-            long offset = (long) index * (long) DEFAULT_PAGE_SIZE;
-            if (offset >= SPILL_FILE_SIZE) {
-                // Offset exceeds the first SpillFile size
-                // Get the index of the file that should contain the pageID
-                fileIndex = (int) (offset / SPILL_FILE_SIZE);
-                if (!tempFiles.containsKey(fileIndex)) {
-                    // Dynamically add new spillFiles if directory grows beyond
-                    // max page ID.
-                    tempFile = createTempFile();
-                    tempFiles.put(fileIndex, tempFile);
-                }
+        	TempFile tempFile = null;
+        	int fileIndex = 0;
+        	
+            long offset = (long) index * (long) DEFAULT_PAGE_SIZE;            
+            if(offset >= SPILL_FILE_SIZE) {
+            	// Offset exceeds the first SpillFile size
+            	// Get the index of the file that should contain the pageID
+            	fileIndex = (int)(offset / SPILL_FILE_SIZE);
+            	if(!tempFiles.containsKey(fileIndex)) {
+            		// Dynamically add new spillFiles if directory grows beyond 
+            		// max page ID.
+            		tempFile = createTempFile();
+            		tempFiles.put(fileIndex, tempFile);
+            	}
             }
-            tempFile = tempFiles.get(fileIndex);
-            RandomAccessFile file = tempFile.rndFile;
-            file.seek(offset);
-            return file;
+        	tempFile = tempFiles.get(fileIndex);
+        	// Channel gets buffered in file object
+        	FileChannel fc = tempFile.getChannel();
+
+        	return fc.map(MapMode.READ_WRITE, offset, DEFAULT_PAGE_SIZE);
         } catch (IOException ioe) {
             // Close resource
             close();

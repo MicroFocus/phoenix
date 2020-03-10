@@ -88,10 +88,4 @@ public interface Expression extends PDatum, Writable {
      * @return
      */
     boolean requiresFinalEvaluation();
-
-    /**
-     * Determines if expression needs to be cloned in {@link org.apache.phoenix.compile.RowProjector}
-     * @return
-     */
-    boolean isCloneExpression();
 }

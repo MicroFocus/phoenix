@@ -18,16 +18,12 @@
 package org.apache.phoenix.schema.stats;
 
 import static org.apache.phoenix.query.QueryServices.STATS_COLLECTION_ENABLED;
+import static org.apache.phoenix.query.QueryServices.STATS_ENABLED_ATTRIB;
 import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_STATS_COLLECTION_ENABLED;
 
 import java.io.IOException;
 
-import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
-import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
-import org.apache.phoenix.util.SchemaUtil;
-import org.apache.phoenix.util.ServerUtil.ConnectionFactory;
-import org.apache.phoenix.util.ServerUtil.ConnectionType;
 
 /**
  * Provides new {@link StatisticsCollector} instances based on configuration settings for a
@@ -52,11 +48,8 @@ public class StatisticsCollectorFactory {
             byte[] storeName, byte[] guidepostWidthBytes,
             byte[] guidepostsPerRegionBytes) throws IOException {
         if (statisticsEnabled(env)) {
-            StatisticsWriter statsWriter = StatisticsWriter.newWriter(env, tableName, clientTimeStamp);
-            Table table = ConnectionFactory.getConnection(ConnectionType.DEFAULT_SERVER_CONNECTION, env).getTable(
-                    SchemaUtil.getPhysicalTableName(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME_BYTES, env.getConfiguration()));
-            return new DefaultStatisticsCollector(env.getConfiguration(), env.getRegion(), tableName,
-                    storeName,guidepostWidthBytes, guidepostsPerRegionBytes, statsWriter, table);
+            return new DefaultStatisticsCollector(env, tableName, clientTimeStamp, storeName,
+                    guidepostWidthBytes, guidepostsPerRegionBytes);
         } else {
             return new NoOpStatisticsCollector();
         }
@@ -69,7 +62,11 @@ public class StatisticsCollectorFactory {
      * use case for that.
      */
     private static boolean statisticsEnabled(RegionCoprocessorEnvironment env) {
-        return (env.getConfiguration().getBoolean(STATS_COLLECTION_ENABLED, DEFAULT_STATS_COLLECTION_ENABLED))
+        return (env.getConfiguration().getBoolean(STATS_COLLECTION_ENABLED,
+            DEFAULT_STATS_COLLECTION_ENABLED)
+            // old config left here for backward compatibility. TODO: remove in the next major release
+            && env.getConfiguration().getBoolean(STATS_ENABLED_ATTRIB, true)
+            )
             && StatisticsUtil.isStatsEnabled(env.getRegionInfo().getTable());
     }
 

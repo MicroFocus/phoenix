@@ -125,6 +125,12 @@ public class CreateTableCompiler {
             // Used to track column references in a view
             ExpressionCompiler expressionCompiler = new ColumnTrackingExpressionCompiler(context, isViewColumnReferencedToBe);
             parentToBe = tableRef.getTable();
+            // Disallow creating views on top of SYSTEM tables. See PHOENIX-5386
+            if (parentToBe.getType() == PTableType.SYSTEM) {
+                throw new SQLExceptionInfo
+                        .Builder(SQLExceptionCode.CANNOT_CREATE_VIEWS_ON_SYSTEM_TABLES)
+                        .build().buildException();
+            }
             viewTypeToBe = parentToBe.getViewType() == ViewType.MAPPED ? ViewType.MAPPED : ViewType.UPDATABLE;
             if (whereNode == null) {
                 viewStatementToBe = parentToBe.getViewStatement();
@@ -156,23 +162,6 @@ public class CreateTableCompiler {
                     if (viewTypeToBe != ViewType.UPDATABLE) {
                         viewColumnConstantsToBe = null;
                     }
-                }
-            }
-            if (viewTypeToBe == ViewType.MAPPED && parentToBe.getPKColumns().size() == 0) {
-                boolean isPKMissed = true;
-                if (pkConstraint.getColumnNames().size() > 0) {
-                    isPKMissed = false;
-                } else {
-                    for (ColumnDef columnDef: columnDefs) {
-                        if (columnDef.isPK()){
-                            isPKMissed = false;
-                            break;
-                        }
-                    }
-                }
-                if (isPKMissed) {
-                    throw new SQLExceptionInfo.Builder(SQLExceptionCode.PRIMARY_KEY_MISSING)
-                            .build().buildException();
                 }
             }
         }
@@ -222,7 +211,7 @@ public class CreateTableCompiler {
         };
     }
     
-    public static class ColumnTrackingExpressionCompiler extends ExpressionCompiler {
+    private static class ColumnTrackingExpressionCompiler extends ExpressionCompiler {
         private final BitSet isColumnReferenced;
         
         public ColumnTrackingExpressionCompiler(StatementContext context, BitSet isColumnReferenced) {

@@ -92,7 +92,6 @@ import org.apache.phoenix.expression.RowKeyColumnExpression;
 import org.apache.phoenix.iterate.MaterializedResultIterator;
 import org.apache.phoenix.iterate.ParallelScanGrouper;
 import org.apache.phoenix.iterate.ResultIterator;
-import org.apache.phoenix.log.LogLevel;
 import org.apache.phoenix.log.QueryLogInfo;
 import org.apache.phoenix.log.QueryStatus;
 import org.apache.phoenix.log.QueryLogger;
@@ -488,10 +487,7 @@ public class PhoenixStatement implements Statement, SQLCloseable {
                 select = StatementNormalizer.normalize(transformedSelect, resolver);
             }
 
-            QueryPlan plan = new QueryCompiler(stmt, select, resolver, Collections.emptyList(),
-                    stmt.getConnection().getIteratorFactory(), new SequenceManager(stmt),
-                    true, false, null)
-                    .compile();
+            QueryPlan plan = new QueryCompiler(stmt, select, resolver, Collections.<PDatum>emptyList(), stmt.getConnection().getIteratorFactory(), new SequenceManager(stmt), true, false, null).compile();
             plan.getContext().getSequenceManager().validateSequences(seqAction);
             return plan;
         }
@@ -532,7 +528,7 @@ public class PhoenixStatement implements Statement, SQLCloseable {
             new PColumnImpl(PNameFactory.newName(EXPLAIN_PLAN_BYTES_ESTIMATE),
                     PNameFactory.newName(EXPLAIN_PLAN_FAMILY), PLong.INSTANCE, null, null, true, 1,
                     SortOrder.getDefault(), 0, null, false, null, false, false,
-                    EXPLAIN_PLAN_BYTES_ESTIMATE, 0, false);
+                    EXPLAIN_PLAN_BYTES_ESTIMATE);
 
     private static final String EXPLAIN_PLAN_ROWS_ESTIMATE_COLUMN_NAME = "RowsEstimate";
     private static final byte[] EXPLAIN_PLAN_ROWS_ESTIMATE =
@@ -542,7 +538,7 @@ public class PhoenixStatement implements Statement, SQLCloseable {
             new PColumnImpl(PNameFactory.newName(EXPLAIN_PLAN_ROWS_ESTIMATE),
                     PNameFactory.newName(EXPLAIN_PLAN_FAMILY), PLong.INSTANCE, null, null, true, 2,
                     SortOrder.getDefault(), 0, null, false, null, false, false,
-                    EXPLAIN_PLAN_ROWS_ESTIMATE, 0, false);
+                    EXPLAIN_PLAN_ROWS_ESTIMATE);
 
     private static final String EXPLAIN_PLAN_ESTIMATE_INFO_TS_COLUMN_NAME = "EstimateInfoTS";
     private static final byte[] EXPLAIN_PLAN_ESTIMATE_INFO_TS =
@@ -552,7 +548,7 @@ public class PhoenixStatement implements Statement, SQLCloseable {
             new PColumnImpl(PNameFactory.newName(EXPLAIN_PLAN_ESTIMATE_INFO_TS),
                 PNameFactory.newName(EXPLAIN_PLAN_FAMILY), PLong.INSTANCE, null, null, true, 3,
                 SortOrder.getDefault(), 0, null, false, null, false, false,
-                EXPLAIN_PLAN_ESTIMATE_INFO_TS, 0, false);
+                EXPLAIN_PLAN_ESTIMATE_INFO_TS);
 
     private static final RowProjector EXPLAIN_PLAN_ROW_PROJECTOR_WITH_BYTE_ROW_ESTIMATES =
             new RowProjector(Arrays
@@ -766,11 +762,6 @@ public class PhoenixStatement implements Statement, SQLCloseable {
                 @Override
                 public Long getEstimateInfoTimestamp() throws SQLException {
                     return estimateTs;
-                }
-
-                @Override
-                public List<OrderBy> getOutputOrderBys() {
-                    return Collections.<OrderBy> emptyList();
                 }
             };
         }
@@ -1118,7 +1109,7 @@ public class PhoenixStatement implements Statement, SQLCloseable {
     private static class ExecutableDropTableStatement extends DropTableStatement implements CompilableStatement {
 
         ExecutableDropTableStatement(TableName tableName, PTableType tableType, boolean ifExists, boolean cascade) {
-            super(tableName, tableType, ifExists, cascade, false);
+            super(tableName, tableType, ifExists, cascade);
         }
 
         @SuppressWarnings("unchecked")
@@ -1770,10 +1761,6 @@ public class PhoenixStatement implements Statement, SQLCloseable {
     }
 
     public QueryLogger createQueryLogger(CompilableStatement stmt, String sql) throws SQLException {
-        if (connection.getLogLevel() == LogLevel.OFF) {
-            return QueryLogger.NO_OP_INSTANCE;
-        }
-
         boolean isSystemTable=false;
         if(stmt instanceof ExecutableSelectStatement){
             TableNode from = ((ExecutableSelectStatement)stmt).getFrom();

@@ -60,6 +60,7 @@ import org.apache.phoenix.expression.LongSubtractExpression;
 import org.apache.phoenix.expression.ModulusExpression;
 import org.apache.phoenix.expression.NotExpression;
 import org.apache.phoenix.expression.OrExpression;
+import org.apache.phoenix.expression.RowKeyColumnExpression;
 import org.apache.phoenix.expression.RowValueConstructorExpression;
 import org.apache.phoenix.expression.StringBasedLikeExpression;
 import org.apache.phoenix.expression.StringConcatExpression;
@@ -116,7 +117,9 @@ import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PDatum;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
+import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
 import org.apache.phoenix.schema.PTableType;
+import org.apache.phoenix.schema.RowKeyValueAccessor;
 import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.TypeMismatchException;
@@ -298,7 +301,8 @@ public class ExpressionCompiler extends UnsupportedAllParseNodeVisitor<Expressio
             int index = groupBy.getExpressions().indexOf(expression);
             if (index >= 0) {
                 isAggregate = true;
-                expression = ExpressionUtil.convertGroupByExpressionToRowKeyColumnExpression(groupBy, expression, index);
+                RowKeyValueAccessor accessor = new RowKeyValueAccessor(groupBy.getKeyExpressions(), index);
+                expression = new RowKeyColumnExpression(expression, accessor, groupBy.getKeyExpressions().get(index).getDataType());
             }
         }
         return expression;
@@ -507,6 +511,9 @@ public class ExpressionCompiler extends UnsupportedAllParseNodeVisitor<Expressio
             }
             if (index == -1) {
                 String rhsLiteral = LikeExpression.unescapeLike(pattern);
+                if (lhsMaxLength != null && lhsMaxLength != rhsLiteral.length()) {
+                    return LiteralExpression.newConstant(false, rhs.getDeterminism());
+                }
                 if (node.getLikeType() == LikeType.CASE_SENSITIVE) {
                   CompareOp op = node.isNegate() ? CompareOp.NOT_EQUAL : CompareOp.EQUAL;
                   if (pattern.equals(rhsLiteral)) {
@@ -579,16 +586,11 @@ public class ExpressionCompiler extends UnsupportedAllParseNodeVisitor<Expressio
         Expression firstChildExpr = expressions.get(0);
         if(fromDataType == targetDataType) {
             return firstChildExpr;
-        } else if ((fromDataType == PDecimal.INSTANCE || fromDataType == PTimestamp.INSTANCE ||
-                fromDataType == PUnsignedTimestamp.INSTANCE) && targetDataType.isCoercibleTo(
-                PLong.INSTANCE)) {
+        } else if((fromDataType == PDecimal.INSTANCE || fromDataType == PTimestamp.INSTANCE || fromDataType == PUnsignedTimestamp.INSTANCE) && targetDataType.isCoercibleTo(
+          PLong.INSTANCE)) {
             return RoundDecimalExpression.create(expressions);
-        } else if (expressions.size() == 1 && fromDataType == PTimestamp.INSTANCE  &&
-                targetDataType.isCoercibleTo(PDate.INSTANCE)) {
-            return firstChildExpr;
-        } else if((fromDataType == PDecimal.INSTANCE || fromDataType == PTimestamp.INSTANCE ||
-                fromDataType == PUnsignedTimestamp.INSTANCE) && targetDataType.isCoercibleTo(
-                        PDate.INSTANCE)) {
+        } else if((fromDataType == PDecimal.INSTANCE || fromDataType == PTimestamp.INSTANCE || fromDataType == PUnsignedTimestamp.INSTANCE) && targetDataType.isCoercibleTo(
+          PDate.INSTANCE)) {
             return RoundTimestampExpression.create(expressions);
         } else if(fromDataType.isCastableTo(targetDataType)) {
             return firstChildExpr;
@@ -1318,8 +1320,10 @@ public class ExpressionCompiler extends UnsupportedAllParseNodeVisitor<Expressio
     @Override
     public Expression visitLeave(ExistsParseNode node, List<Expression> l) throws SQLException {
         LiteralExpression child = (LiteralExpression) l.get(0);
-        PhoenixArray array = (PhoenixArray) child.getValue();
-        return LiteralExpression.newConstant(array.getDimensions() > 0 ^ node.isNegate(), PBoolean.INSTANCE);
+        PhoenixArray array = null;
+        Boolean exists = child != null && (array = (PhoenixArray) child.getValue()) != null
+          && array.getDimensions() > 0;
+        return LiteralExpression.newConstant(exists ^ node.isNegate(), PBoolean.INSTANCE);
     }
 
     @Override

@@ -38,11 +38,6 @@ public abstract class BaseTuple implements Tuple {
     public void getKey(ImmutableBytesWritable ptr) {
         throw new UnsupportedOperationException();
     }
-
-    @Override
-    public Cell mergeWithDynColsListBytesAndGetValue(int index, byte[] dynColsList) {
-        throw new UnsupportedOperationException();
-    }
     
     @Override
     public Cell getValue(int index) {

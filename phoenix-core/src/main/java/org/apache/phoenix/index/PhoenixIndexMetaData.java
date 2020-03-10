@@ -37,8 +37,7 @@ public class PhoenixIndexMetaData implements IndexMetaData {
     private final boolean hasLocalIndexes;
     
     public static boolean isIndexRebuild(Map<String,byte[]> attributes) {
-        return attributes.get(BaseScannerRegionObserver.REPLAY_WRITES)
-                == BaseScannerRegionObserver.REPLAY_INDEX_REBUILD_WRITES;
+        return attributes.get(BaseScannerRegionObserver.REPLAY_WRITES) != null;
     }
     
     public static ReplayWrite getReplayWrite(Map<String,byte[]> attributes) {

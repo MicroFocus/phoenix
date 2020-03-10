@@ -175,7 +175,14 @@ public class EncodedColumnQualiferCellsList implements List<Cell> {
                     firstNonNullElementIdx = -1;
                 } else if (firstNonNullElementIdx == i) {
                     // the element being removed was the first non-null element we knew
-                    adjustFirstNonNullElement();
+                    while (i < array.length && (array[i]) == null) {
+                        i++;
+                    }
+                    if (i < array.length) {
+                        firstNonNullElementIdx = i;
+                    } else {
+                        firstNonNullElementIdx = -1;
+                    }
                 }
                 modCount++;
                 return true;
@@ -376,18 +383,6 @@ public class EncodedColumnQualiferCellsList implements List<Cell> {
         return getCellForColumnQualifier(columnQualifier);
     }
 
-    private void adjustFirstNonNullElement() {
-        int i = firstNonNullElementIdx;
-        while (i < array.length && (array[i]) == null) {
-            i++;
-        }
-        if (i < array.length) {
-            firstNonNullElementIdx = i;
-        } else {
-            firstNonNullElementIdx = -1;
-        }
-
-    }
     private Cell getCellForColumnQualifier(int columnQualifier) {
         checkQualifierRange(columnQualifier);
         int idx = getArrayIndex(columnQualifier);
@@ -466,10 +461,6 @@ public class EncodedColumnQualiferCellsList implements List<Cell> {
             }
             checkForCoModification();
             array[lastRet] = null;
-            if (firstNonNullElementIdx == lastRet) {
-                // the element being removed was the first non-null element we knew
-                adjustFirstNonNullElement();
-            }
             lastRet = -1;
             numNonNullElements--;
             modCount++;

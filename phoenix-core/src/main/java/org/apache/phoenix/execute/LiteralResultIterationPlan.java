@@ -142,9 +142,4 @@ public class LiteralResultIterationPlan extends BaseQueryPlan {
     public Long getEstimateInfoTimestamp() throws SQLException {
         return 0l;
     }
-
-    @Override
-    public List<OrderBy> getOutputOrderBys() {
-        return Collections.<OrderBy> emptyList();
-    }
 }
