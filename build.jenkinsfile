@@ -20,6 +20,6 @@ node("ops") {
     }
 
     stage('Archiving Artifacts') {
-       archiveArtifacts 'phoenix-spark/target/phoenix-spark-4.14-HBase-1.4-emr-5.23.0.jar'
+       archiveArtifacts 'phoenix-spark/target/phoenix-spark-4.14-HBase-1.4-emr-5.29.0.jar'
     }
 }
