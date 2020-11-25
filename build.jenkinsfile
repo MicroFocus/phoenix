@@ -4,13 +4,14 @@
 properties([
     parameters([
         string(defaultValue: params.BRANCH_NAME, description: 'Branch of git repo to get jenkinsfile from', name: 'BRANCH_NAME'),
-        string(defaultValue: params.BUILD_ENV_LABEL ?: 'ops', description: 'Label for the build environment to use', name: 'BUILD_ENV_LABEL', trim: false)
+        string(defaultValue: params.BUILD_ENV_LABEL ?: 'ops', description: 'Label for the build environment to use', name: 'BUILD_ENV_LABEL', trim: false),
+        string(defaultValue: params.GIT_CREDENTIAL_ID ?: 'git-interset-readonly', description: 'Git credential identified', name: 'GIT_CREDENTIAL_ID', trim: false)
     ])
 ])
 
 node("${params.BUILD_ENV_LABEL}") {
     stage('Cloning Repo') {
-        git branch: params.BRANCH_NAME, credentialsId: 'interset-readonly', url: 'git@github.com:MicroFocus/phoenix.git'
+        git branch: params.BRANCH_NAME, credentialsId: params.GIT_CREDENTIAL_ID, url: 'git@github.com:MicroFocus/phoenix.git'
     }
 
     stage('Building Phoenix Parcel') {
