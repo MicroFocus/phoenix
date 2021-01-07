@@ -2,11 +2,12 @@
 
 properties([
     parameters([
-        string(defaultValue: params.BRANCH_NAME, description: 'Branch of git repo to get jenkinsfile from', name: 'BRANCH_NAME'),
+        string(defaultValue: params.BRANCH_NAME ?: '5.0.0-HBase-2.0-emr-6.0.0', description: 'Branch of git repo to get jenkinsfile from', name: 'BRANCH_NAME'),
+        string(defaultValue: params.BUILD_ENV_LABEL ?: 'kb_build_ops', description: 'Build node', name: 'BUILD_ENV_LABEL')
     ])
 ])
 
-node("ops") {
+node("${params.BUILD_ENV_LABEL}") {
     stage('Cloning Repo') {
         git branch: params.BRANCH_NAME, credentialsId: 'git-interset-readonly', url: 'git@github.com:MicroFocus/phoenix.git'
     }
@@ -20,5 +21,9 @@ node("ops") {
 
     stage('Archiving Artifacts') {
        archiveArtifacts 'phoenix-spark/target/phoenix-spark-5.0.0-HBase-2.0-emr-6.0.0.jar'
+    }
+
+    stage('Cleanup Workspace') {
+        cleanWs()
     }
 }
